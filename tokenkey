@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>MINH PHƯƠNG — Get Key</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: linear-gradient(160deg, #E0F7FA 0%, #B2EBF2 45%, #80DEEA 100%);
+    padding: 20px;
+  }
+
+  .box {
+    width: 440px;
+    max-width: 100%;
+    background: linear-gradient(165deg, #E0F7FA 0%, #B2EBF2 45%, #80DEEA 100%);
+    border: 2px solid rgba(255,255,255,.9);
+    border-radius: 20px;
+    padding: 28px 24px;
+    box-shadow: 0 14px 40px rgba(2,119,189,.35);
+    text-align: center;
+  }
+
+  .rose { font-size: 48px; line-height: 1; margin-bottom: 8px; }
+  .title { font-size: 16px; font-weight: 900; color: #01579B; letter-spacing: .6px; }
+  .sub {
+    font-size: 10px; letter-spacing: 2px; font-weight: 800;
+    color: #00838F; margin-top: 6px; text-transform: uppercase;
+  }
+
+  .btn {
+    width: 100%;
+    margin-top: 22px;
+    padding: 14px;
+    border: none;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #00BCD4, #0277BD);
+    color: #FFF;
+    font-weight: 900;
+    font-size: 13px;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    cursor: pointer;
+    font-family: inherit;
+    box-shadow: 0 6px 16px rgba(2,119,189,.45);
+    transition: transform .12s, box-shadow .12s;
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(2,119,189,.55); }
+  .btn:active:not(:disabled) { transform: translateY(0); }
+  .btn:disabled { opacity: .6; cursor: not-allowed; }
+
+  .result { margin-top: 20px; }
+
+  .key-card {
+    background: #FFF;
+    border-radius: 14px;
+    padding: 18px 16px;
+    border: 2px solid #4DD0E1;
+    border-left: 5px solid #2E7D32;
+    animation: slideIn .35s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .key-card::before {
+    content: '';
+    position: absolute;
+    top: -50%; right: -50%;
+    width: 200%; height: 200%;
+    background: linear-gradient(45deg, transparent 40%, rgba(46,125,50,.08) 50%, transparent 60%);
+    animation: shimmer 2.4s infinite;
+    pointer-events: none;
+  }
+
+  @keyframes shimmer {
+    from { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+    to   { transform: translateX(100%) translateY(100%) rotate(45deg); }
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px) scale(.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .key-label {
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 2.4px;
+    color: #2E7D32;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .key-value {
+    font-family: "Courier New", monospace;
+    font-size: 19px;
+    font-weight: 900;
+    color: #1B5E20;
+    letter-spacing: 3px;
+    word-break: break-all;
+    user-select: all;
+    cursor: pointer;
+    line-height: 1.4;
+    padding: 6px 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .copy-hint {
+    font-size: 8px;
+    color: #4DB6AC;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    margin-top: 8px;
+    text-transform: uppercase;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hint {
+    font-size: 9.5px;
+    color: #00838F;
+    font-weight: 700;
+    text-align: center;
+    margin-top: 14px;
+    font-style: italic;
+    opacity: .8;
+    line-height: 1.5;
+  }
+
+  .footer {
+    margin-top: 18px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: #00838F;
+    opacity: .55;
+  }
+
+  .loading {
+    font-size: 11px;
+    color: #00838F;
+    font-weight: 800;
+    padding: 22px 0;
+    letter-spacing: 1px;
+  }
+  .loading::after {
+    content: '';
+    display: inline-block;
+    width: 14px;
+    text-align: left;
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0%, 20% { content: ''; }
+    40% { content: '.'; }
+    60% { content: '..'; }
+    80%, 100% { content: '...'; }
+  }
+
+  .toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-100px);
+    background: linear-gradient(135deg, #00838F, #00BCD4);
+    color: #FFF;
+    padding: 10px 22px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1.5px solid rgba(255,255,255,.9);
+    box-shadow: 0 6px 20px rgba(2,119,189,.5);
+    transition: transform .3s;
+    z-index: 999;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ============ SERVER MODE STYLE ============ */
+  #serverUI {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(160deg, #0D47A1 0%, #01579B 55%, #0277BD 100%);
+    align-items: center;
+    justify-content: center;
+    color: #FFF;
+    font-family: "Segoe UI", Arial, sans-serif;
+    z-index: 9999;
+  }
+  #serverUI.show { display: flex; }
+
+  .srv-inner { text-align: center; padding: 20px; }
+
+  .srv-spinner {
+    width: 54px;
+    height: 54px;
+    border: 4px solid rgba(178,235,242,.3);
+    border-top-color: #4DD0E1;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto 18px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .srv-title {
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+  }
+
+  .srv-sub {
+    font-size: 10px;
+    color: #B2EBF2;
+    letter-spacing: 1.8px;
+    margin-top: 8px;
+    font-weight: 700;
+  }
+
+  .srv-warn {
+    color: #FFCDD2;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 20px;
+    text-align: center;
+    max-width: 340px;
+    line-height: 1.6;
+  }
+
+  .srv-warn b { color: #FFF; }
+</style>
+</head>
+<body>
+
+<!-- ============ CLIENT UI ============ -->
+<div class="box" id="clientUI">
+  <div class="rose">🌊</div>
+  <div class="title">MINH PHƯƠNG AUTO</div>
+  <div class="sub">Nhấn nút để nhận KEY</div>
+
+  <button class="btn" id="getBtn">🔑 GET KEY</button>
+
+  <div class="result" id="result"></div>
+
+  <div class="footer">© MINHPHUONG 🇻🇳</div>
+</div>
+
+<div class="toast" id="toast">📋 Đã copy</div>
+
+<!-- ============ SERVER UI (hiện khi URL có ?role=server) ============ -->
+<div id="serverUI">
+  <div class="srv-inner" id="srvInner">
+    <div class="srv-spinner"></div>
+    <div class="srv-title">Đang sinh KEY</div>
+    <div class="srv-sub">Vui lòng chờ trong giây lát...</div>
+  </div>
+</div>
+
+<script>
+/* ==================================================================
+ *  MINH PHƯƠNG — Single-File Key Generator
+ *  - Client mode:  getkey.html           → hiện UI, bấm để GET KEY
+ *  - Server mode:  getkey.html?role=server → sinh TOKEN ngầm, trả KEY, tự đóng
+ *
+ *  ★ TOKEN tuyệt đối không rời khỏi server scope
+ * ================================================================== */
+(function () {
+  'use strict';
+
+  // ---------- Xác định chế độ dựa vào URL ----------
+  var params   = new URLSearchParams(location.search);
+  var isServer = params.get('role') === 'server';
+
+  // ==================================================================
+  //  SHARED: TOKEN & KEY ENGINE
+  // ==================================================================
+
+  // Sinh hex ngẫu nhiên
+  function randomHex(len) {
+    var chars = '0123456789abcdef';
+    var s = '';
+    for (var i = 0; i < len; i++) s += chars[Math.floor(Math.random() * 16)];
+    return s;
+  }
+
+  // Hash FNV-1a 32-bit
+  function fnv1a(str) {
+    var h = 0x811c9dc5 >>> 0;
+    for (var i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = (h * 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  // Từ TOKEN → KEY  (MP-XXXX-XXXX-XXXX-XXXX)
+  function deriveKey(token) {
+    var parts = [];
+    for (var i = 0; i < 4; i++) {
+      var chunk = token.slice(i * 8, i * 8 + 8);
+      var h = fnv1a(chunk + '_MP_' + i + '_' + token.length);
+      parts.push(h.toString(36).toUpperCase().padStart(6, '0').slice(0, 4));
+    }
+    return 'MP-' + parts.join('-');
+  }
+
+  // ==================================================================
+  //  SERVER MODE
+  // ==================================================================
+  if (isServer) {
+    runServer();
+    return;
+  }
+
+  function runServer() {
+    // Ẩn client UI
+    var clientUI = document.getElementById('clientUI');
+    if (clientUI) clientUI.style.display = 'none';
+
+    // Hiện server UI
+    var srv = document.getElementById('serverUI');
+    srv.classList.add('show');
+    document.title = '⚙️ Đang sinh KEY...';
+
+    // ★ Sinh TOKEN — CHỈ tồn tại trong closure này
+    var TOKEN = randomHex(32);
+
+    // Sinh KEY từ TOKEN
+    var KEY = deriveKey(TOKEN);
+
+    // ★ Lưu TOKEN vào vault nội bộ (không gửi ra ngoài)
+    //   Dùng để verify về sau nếu cần
+    if (!window.__mpVault) {
+      Object.defineProperty(window, '__mpVault', {
+        value: new Map(),
+        writable: false,
+        configurable: false
+      });
+    }
+    window.__mpVault.set(KEY, TOKEN);
+
+    // Gửi KEY cho opener
+    var sent = false;
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({
+          type: 'mp-key-response',
+          key:  KEY,
+          at:   Date.now()
+        }, '*');
+        sent = true;
+      }
+    } catch (e) {}
+
+    // Nếu gửi thành công → đóng popup sau ~250ms
+    if (sent) {
+      setTimeout(function () {
+        try { window.close(); } catch (e) {}
+        // Fallback nếu browser chặn close()
+        setTimeout(function () {
+          document.getElementById('srvInner').innerHTML =
+            '<div class="srv-warn">' +
+              '✅ <b>KEY đã được gửi đi!</b><br>' +
+              'Bạn có thể đóng tab này thủ công.' +
+            '</div>';
+        }, 400);
+      }, 250);
+    } else {
+      // Không có opener → báo lỗi
+      document.getElementById('srvInner').innerHTML =
+        '<div class="srv-warn">' +
+          '⚠️ <b>Không tìm thấy trang gốc!</b><br>' +
+          'Vui lòng mở trang chính và bấm <b>GET KEY</b>.' +
+        '</div>';
+    }
+  }
+
+  // ==================================================================
+  //  CLIENT MODE
+  // ==================================================================
+  var btn    = document.getElementById('getBtn');
+  var result = document.getElementById('result');
+  var toast  = document.getElementById('toast');
+
+  // Set chống trùng KEY hiển thị
+  var seenKeys = new Set();
+
+  // Reference tới popup đang mở
+  var popupRef = null;
+
+  // ---------- Toast ----------
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () {
+      toast.classList.remove('show');
+    }, 1800);
+  }
+
+  // ---------- Copy on click ----------
+  function bindCopy(el, text) {
+    el.addEventListener('click', function () {
+      navigator.clipboard.writeText(text).then(function () {
+        showToast('📋 Đã copy KEY');
+      }).catch(function () {});
+    });
+  }
+
+  // ---------- Nhận KEY từ popup server ----------
+  window.addEventListener('message', function (e) {
+    var data = e.data;
+    if (!data || data.type !== 'mp-key-response' || !data.key) return;
+
+    var KEY = data.key;
+    popupRef = null;
+
+    if (seenKeys.has(KEY)) {
+      btn.disabled = false;
+      btn.textContent = '🔑 GET KEY MỚI';
+      showToast('⚠️ Trùng KEY — thử lại');
+      return;
+    }
+    seenKeys.add(KEY);
+
+    result.innerHTML =
+      '<div class="key-card">' +
+        '<div class="key-label">🔑 KEY ĐÃ SINH</div>' +
+        '<div class="key-value" id="valKey">' + KEY + '</div>' +
+        '<div class="copy-hint">click vào KEY để copy</div>' +
+      '</div>' +
+      '<div class="hint">KEY này đã sẵn sàng để sử dụng.<br>Mỗi lần bấm sẽ sinh KEY mới.</div>';
+
+    bindCopy(document.getElementById('valKey'), KEY);
+
+    btn.disabled = false;
+    btn.textContent = '🔑 GET KEY MỚI';
+    clearTimeout(btn._to);
+  });
+
+  // ---------- Bấm GET KEY ----------
+  btn.addEventListener('click', function () {
+    // Nếu đang có popup cũ → đóng
+    if (popupRef && !popupRef.closed) {
+      try { popupRef.close(); } catch (e) {}
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Đang sinh KEY...';
+    result.innerHTML = '<div class="loading">Đang mở server</div>';
+
+    // ★ Tạo URL server với query ?role=server (URL KHÁC biệt rõ ràng)
+    var url = new URL(location.href);
+    url.searchParams.set('role', 'server');
+
+    // Tính vị trí popup căn giữa
+    var w = 420, h = 300;
+    var left = Math.max(0, (screen.width  - w) / 2);
+    var top  = Math.max(0, (screen.height - h) / 2);
+
+    // Mở popup
+    try {
+      popupRef = window.open(
+        url.toString(),
+        'mp_token_server_' + Date.now(),
+        'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
+        ',menubar=no,toolbar=no,location=yes,status=no,resizable=no,scrollbars=no'
+      );
+    } catch (e) {
+      popupRef = null;
+    }
+
+    if (!popupRef || popupRef.closed) {
+      btn.disabled = false;
+      btn.textContent = '🔑 GET KEY';
+      result.innerHTML =
+        '<div class="hint" style="color:#C62828">' +
+          '⚠️ Popup bị chặn!<br>Hãy cho phép popup cho trang này rồi thử lại.' +
+        '</div>';
+      return;
+    }
+
+    // Timeout an toàn
+    clearTimeout(btn._to);
+    btn._to = setTimeout(function () {
+      if (btn.disabled) {
+        btn.disabled = false;
+        btn.textContent = '🔑 GET KEY';
+        result.innerHTML = '<div class="hint" style="color:#C62828">⚠️ Timeout — thử lại</div>';
+        try { if (popupRef && !popupRef.closed) popupRef.close(); } catch (e) {}
+        popupRef = null;
+      }
+    }, 8000);
+
+    // Theo dõi popup bị đóng trước khi trả KEY
+    var watch = setInterval(function () {
+      if (!popupRef || popupRef.closed) {
+        clearInterval(watch);
+        setTimeout(function () {
+          if (btn.disabled) {
+            btn.disabled = false;
+            btn.textContent = '🔑 GET KEY';
+            if (result.querySelector('.loading')) {
+              result.innerHTML =
+                '<div class="hint" style="color:#C62828">' +
+                  '⚠️ Popup đóng mà không trả KEY — thử lại.' +
+                '</div>';
+            }
+          }
+        }, 600);
+      }
+    }, 300);
+  });
+
+  // ---------- Auto-get khi load (tùy chọn) ----------
+  // Nếu muốn tự sinh KEY ngay khi mở trang:
+  // window.addEventListener('load', function () { setTimeout(function () { btn.click(); }, 200); });
+})();
+</script>
+
+</body>
+</html>
