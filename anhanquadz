@@ -1,1585 +1,1092 @@
--- ==========================================
--- CONFIG
--- ==========================================
-local API_URL         = "https://andzvclra.andanok81.workers.dev/api.php"
-local GET_KEY_URL     = "https://andzvclra.andanok81.workers.dev/vuotlink"
-local SAVE_FILE       = "andz_saved_key.txt"
-
--- File ảnh trong Delta/Workspace
-local LOGO_LOCAL_FILE = "anngu.jpg" -- đổi thành "logo.png" nếu muốn dùng logo cũ
-local BG_LOCAL_FILE   = "anngu.jpg"   -- nếu có ok.jpg trong Workspace sẽ làm nền menu
-local LOGO_DIRECT_URL = ""
-local LOGO_ASSET_ID   = ""
-
+local GameId = game.GameId
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 local CoreGui = game:GetService("CoreGui")
-local Camera = workspace.CurrentCamera
+local Debris = game:GetService("Debris")
+local StarterGui = game:GetService("StarterGui")
+local ContentProvider = game:GetService("ContentProvider")
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+repeat task.wait() until game:IsLoaded() and Players.LocalPlayer
 
-local parentGui = (pcall(function() return CoreGui.Name end) and CoreGui) or playerGui
-for _, name in ipairs({ "AndzKeyMenu", "AndzEspHub", "AndzEspOverlay" }) do
-    if parentGui:FindFirstChild(name) then
-        parentGui[name]:Destroy()
-    end
-end
+plr = Players.LocalPlayer
 
 -- ==========================================
--- HELPER FUNCTIONS (EXECUTOR COMPATIBLE)
+-- ANDZ HUB & KEY API CONFIG
 -- ==========================================
-local function getHWID()
-    local hwid = tostring(player.UserId)
-    pcall(function()
-        if gethwid then
-            hwid = tostring(gethwid())
-        elseif getexecutorhwid then
-            hwid = tostring(getexecutorhwid())
-        elseif game:GetService("RbxAnalyticsService").GetClientId then
-            hwid = tostring(game:GetService("RbxAnalyticsService"):GetClientId())
-        end
-    end)
-    return hwid
+local ANDZ_API_URL          = "https://andzvclra.andanok81.workers.dev/api.php"
+local ANDZ_GET_KEY_URL      = "https://andzvclra.andanok81.workers.dev/vuotlink"
+local ANDZ_SAVE_FILE        = "AndzSavedKey.txt"
+local ANDZ_HUB_IMAGE_ID     = "rbxassetid://79283889919078"
+local ANDZ_LOAD_AFTER_VALID = "" -- Tùy chọn: URL raw script hoặc code Lua chạy sau khi key hợp lệ
+
+local function andzGetHWID()
+	local hwid = tostring(plr.UserId)
+	pcall(function()
+		if gethwid then
+			hwid = tostring(gethwid())
+		elseif getexecutorhwid then
+			hwid = tostring(getexecutorhwid())
+		else
+			local analytics = game:GetService("RbxAnalyticsService")
+			if analytics and analytics.GetClientId then
+				hwid = tostring(analytics:GetClientId())
+			end
+		end
+	end)
+	return hwid
 end
 
-local function httpRequestGet(url)
-    local lastErr = "Không thể kết nối tới máy chủ."
-
-    local reqCandidates = {
-        request,
-        http_request,
-        (syn and syn.request),
-        (http and http.request),
-        (fluxus and fluxus.request),
-        (krnl and krnl.request)
-    }
-
-    for _, reqFn in ipairs(reqCandidates) do
-        if type(reqFn) == "function" then
-            local ok, res = pcall(function()
-                return reqFn({
-                    Url = url,
-                    Method = "GET",
-                    Headers = {
-                        ["User-Agent"] = "Mozilla/5.0"
-                    }
-                })
-            end)
-            if ok and type(res) == "table" then
-                local body = res.Body or res.body
-                if body and tostring(body) ~= "" then
-                    return true, tostring(body)
-                end
-                lastErr = "HTTP " .. tostring(res.StatusCode or res.status or "?") .. " (Body rỗng)"
-            elseif not ok then
-                lastErr = tostring(res)
-            end
-        end
-    end
-
-    local okGet, resGet = pcall(function()
-        return game:HttpGet(url, true)
-    end)
-    if okGet and resGet and tostring(resGet) ~= "" then
-        return true, tostring(resGet)
-    elseif not okGet then
-        lastErr = tostring(resGet)
-    end
-
-    return false, lastErr
+local function andzUrlEncode(str)
+	str = tostring(str or "")
+	str = str:gsub("\n", "\r\n")
+	str = str:gsub("([^%w%-_%.~ ])", function(c)
+		return string.format("%%%02X", string.byte(c))
+	end)
+	str = str:gsub(" ", "+")
+	return str
 end
 
-local function resolveLocalAsset(fileName)
-    if getcustomasset and fileName and fileName ~= "" and isfile and isfile(fileName) then
-        local ok, asset = pcall(getcustomasset, fileName)
-        if ok and asset then
-            return tostring(asset), true
-        end
-    end
-    return "", false
+local function andzHttpGet(url)
+	local lastErr = "Không thể kết nối tới máy chủ."
+	local reqCandidates = {
+		request,
+		http_request,
+		(syn and syn.request),
+		(http and http.request),
+		(fluxus and fluxus.request),
+		(krnl and krnl.request)
+	}
+
+	for _, reqFn in ipairs(reqCandidates) do
+		if type(reqFn) == "function" then
+			local ok, res = pcall(function()
+				return reqFn({
+					Url = url,
+					Method = "GET",
+					Headers = {
+						["User-Agent"] = "Mozilla/5.0"
+					}
+				})
+			end)
+			if ok and type(res) == "table" then
+				local body = res.Body or res.body
+				if body and tostring(body) ~= "" then
+					return true, tostring(body)
+				end
+				lastErr = "HTTP " .. tostring(res.StatusCode or res.status or "?") .. " (Body rỗng)"
+			elseif not ok then
+				lastErr = tostring(res)
+			end
+		end
+	end
+
+	local okGet, resGet = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if okGet and resGet and tostring(resGet) ~= "" then
+		return true, tostring(resGet)
+	elseif not okGet then
+		lastErr = tostring(resGet)
+	end
+
+	return false, lastErr
 end
 
-local function resolveLogoImage()
-    local localAsset, okLocal = resolveLocalAsset(LOGO_LOCAL_FILE)
-    if okLocal then
-        return localAsset, true
-    end
+local function andzCheckKey(key)
+	local hwid = andzGetHWID()
+	local sep = ANDZ_API_URL:find("?", 1, true) and "&" or "?"
+	local fullUrl = ANDZ_API_URL .. sep .. "key=" .. andzUrlEncode(key) .. "&hwid=" .. andzUrlEncode(hwid)
 
-    if getcustomasset and LOGO_DIRECT_URL ~= "" and writefile then
-        local cachedName = "andz_custom_logo.png"
-        local okGet, raw = httpRequestGet(LOGO_DIRECT_URL)
-        if okGet and raw and #raw > 0 then
-            pcall(writefile, cachedName, raw)
-            local okAsset, asset = pcall(getcustomasset, cachedName)
-            if okAsset and asset then
-                return tostring(asset), true
-            end
-        end
-    end
+	local ok, body = andzHttpGet(fullUrl)
+	if not ok then
+		return {
+			code = "NETWORK_ERROR",
+			message = tostring(body),
+			data = { total_executions = 0, note = "" }
+		}
+	end
 
-    if LOGO_ASSET_ID ~= "" then
-        return LOGO_ASSET_ID, true
-    end
+	local lowerBody = body:lower()
+	local isValid = lowerBody:find('"valid"%s*:%s*true')
+		or lowerBody:find('"status"%s*:%s*"success"')
+		or lowerBody:find('"success"%s*:%s*true')
+		or (body:gsub("%s+", ""):lower() == "valid")
+		or (body:gsub("%s+", ""):lower() == "success")
 
-    return "", false
+	local msg = body:match('"message"%s*:%s*"([^"]+)"')
+		or body:match('"msg"%s*:%s*"([^"]+)"')
+		or (isValid and "Key hợp lệ!" or "Key không hợp lệ hoặc đã hết hạn.")
+
+	local totalExec = tonumber(body:match('"total_executions"%s*:%s*(%d+)'))
+		or tonumber(body:match('"executions"%s*:%s*(%d+)'))
+		or 1
+
+	local noteVal = body:match('"note"%s*:%s*"([^"]*)"') or ""
+
+	if isValid then
+		return {
+			code = "KEY_VALID",
+			message = msg,
+			data = {
+				total_executions = totalExec,
+				note = noteVal
+			}
+		}
+	end
+
+	if lowerBody:find("hwid") and (lowerBody:find("lock") or lowerBody:find("mismatch") or lowerBody:find("khác")) then
+		return {
+			code = "KEY_HWID_LOCKED",
+			message = msg,
+			data = { total_executions = totalExec, note = noteVal }
+		}
+	end
+
+	return {
+		code = "KEY_INVALID",
+		message = msg,
+		data = { total_executions = totalExec, note = noteVal }
+	}
 end
 
-local function copyText(txt)
-    local ok = pcall(function()
-        if setclipboard then
-            setclipboard(txt)
-        elseif toclipboard then
-            toclipboard(txt)
-        else
-            error("no clipboard")
-        end
-    end)
-    return ok
-end
-
-local function pasteText()
-    local result = nil
-    pcall(function()
-        if getclipboard then
-            result = getclipboard()
-        end
-    end)
-    return result
-end
-
-local function saveKeyToFile(k)
-    pcall(function()
-        if writefile then
-            writefile(SAVE_FILE, k)
-        end
-    end)
-end
-
-local function loadKeyFromFile()
-    local k = nil
-    pcall(function()
-        if isfile and readfile and isfile(SAVE_FILE) then
-            k = readfile(SAVE_FILE)
-        end
-    end)
-    return k
-end
-
-local function urlEncode(str)
-    str = tostring(str or "")
-    str = str:gsub("\n", "\r\n")
-    str = str:gsub("([^%w%-_%.~ ])", function(c)
-        return string.format("%%%02X", string.byte(c))
-    end)
-    str = str:gsub(" ", "+")
-    return str
-end
-
-local function extractExpiryFromBody(body)
-    if not body or body == "" then
-        return "Không có dữ liệu từ API"
-    end
-
-    local patterns = {
-        '"expires_at"%s*:%s*"([^"]+)"',
-        '"expire_at"%s*:%s*"([^"]+)"',
-        '"expires"%s*:%s*"([^"]+)"',
-        '"expired_at"%s*:%s*"([^"]+)"',
-        '"expiry"%s*:%s*"([^"]+)"',
-        '"exp"%s*:%s*"([^"]+)"',
-        '"time_left"%s*:%s*"([^"]+)"',
-        '"remaining"%s*:%s*"([^"]+)"'
-    }
-
-    for _, pat in ipairs(patterns) do
-        local val = body:match(pat)
-        if val and val ~= "" then
-            return val
-        end
-    end
-
-    local numPat = {
-        '"expires_at"%s*:%s*(%d+)',
-        '"expire_at"%s*:%s*(%d+)',
-        '"expires"%s*:%s*(%d+)',
-        '"exp"%s*:%s*(%d+)'
-    }
-    for _, pat in ipairs(numPat) do
-        local num = body:match(pat)
-        if num then
-            local ts = tonumber(num)
-            if ts and ts > 1600000000 then
-                local okDate, formatted = pcall(function()
-                    return os.date("%d/%m/%Y %H:%M:%S", ts)
-                end)
-                if okDate and formatted then
-                    return tostring(formatted)
-                end
-            end
-            return tostring(num)
-        end
-    end
-
-    return "API không trả về hạn key"
-end
-
-local resolvedLogo, hasCustomLogo = resolveLogoImage()
-local resolvedBg, hasBgImage = resolveLocalAsset(BG_LOCAL_FILE)
-
-local keyInfoState = {
-    Key = "",
-    Expires = "Đang cập nhật..."
+local isSupport = nil
+local GameList = {
+	[994732206] = "e4aedc7ccd2bacd83555baa884f3d4b1", -- Blox Fruit
+	[7018190066] = "bf149e75708e91ad902bd72e408fae02", -- Dead Rails
+	[383310974] = "b83e9255dc81e9392da975a89d26e363", -- Adopt Me
+	[4777817887] = "35ad587b07c00b82c218fcf0e55eeea6", -- Blade Ball
+	[5477548919] = "0a9bfef9eb03d0cb17dd85451e4be696", -- Honkai Star Rail Simulator
+	[5750914919] = "b94343ca266a778e5da8d72e92d4aab5", -- Fisch
+	[3359505957] = "095fbd843016a7af1d3a9ee88714c64a", -- Collect All Pets
+	[6167925365] = "e220573a9f986e150c6af8d4d1fb9b7c", -- Cong Dong Viet Nam
+	[5361032378] = "ff4e04500b94246eaa3f5c5be92a8b4a", -- Sol's RNG
+	[7709344486] = "1d5eea7e66ccb5ca4d11c26ff2d4c6b1", -- Steal a Brainrot
+	[7326934954] = "0aa67223637322085cfeaf80ae9af69f", -- 99 Nights in the Forest
+	[3149100453] = "dbe59157859f6030587fd61ad4faad75", -- Eat Blob Simulator
+	[5995470825] = "83363ffca1175ef0c06d4028b77061a4", -- Hypershot
+	[358276974] = "23e50d188c7e27477a1c6eacb076e2ba", -- Apocalypse Rising 2
+	[7541395924] = "c924e9543f9651c9cc1afabfe1f3de65", -- Build An Island
+	[6701277882] = "1c48d56d18692670e5278e1df94997d8", -- Fish It
+	[953622098] = "12933a8f18ec406f1ee26bbdc3b73abf", -- Word Bomb
+	[7200297228] = "da7549d939f1a496dca0b8d3610196b5", -- Loot Hero
+	[7832036655] = "456662bcac892ece28c0062bbe1a7a66", -- Arena Of Blox
+	[7061783500] = "2fb6765dd4c0e2894dd107dd9e14c340", -- 2 Player Battle Tycoon
+	[9619492068] = "85009d2e16759ccb0fc14e091f75eee3", -- Titan Fishing
+	[9186719164] = "282f82c5fbcf3b438888268a4a5fa201", -- Sailor Piece
+	[1451439645] = "282f82c5fbcf3b438888268a4a5fa201", -- King Legacy
+	[3808081382] = "282f82c5fbcf3b438888268a4a5fa201", -- The Strongest Battleground
+	[9338091695] = "282f82c5fbcf3b438888268a4a5fa201", -- Reign Piece
+	[66654135] = "282f82c5fbcf3b438888268a4a5fa201", -- Murder Mystery 2
+	[6331902150] = "282f82c5fbcf3b438888268a4a5fa201", -- Forsaken
+	[8316902627] = "282f82c5fbcf3b438888268a4a5fa201", -- Plant vs Brainrot
+	[7671049560] = "282f82c5fbcf3b438888268a4a5fa201", -- The Forge
+	[9649298941] = "282f82c5fbcf3b438888268a4a5fa201", -- Survive LAVA for Brainrots!
+	[9363735110] = "282f82c5fbcf3b438888268a4a5fa201", -- Escape Tsunami For Brainrot
+	[9860860377] = "282f82c5fbcf3b438888268a4a5fa201", -- Anime Limitless
+	[9073513091] = "282f82c5fbcf3b438888268a4a5fa201", -- Anime Apocalypse
+	[9382839773] = "282f82c5fbcf3b438888268a4a5fa201", -- Lineage Piece
+	[9917246399] = "282f82c5fbcf3b438888268a4a5fa201", -- Pirate Piece
+	[10200395747] = "e21bc4d95b5db444bf19e8e03a664300", -- Grow A Garden 2
+	[7395930870] = "ae046942f7060ae03fe7e55b5a60e8b6", -- Sell Lemons
+	[9584852943] = "19a8c4cbd09697c8f9dbc9982ca10393", -- +1 Speed Keyboard Escape
 }
 
-local function buildAndzBadge(container, showFullTag)
-    if hasCustomLogo then return end
-
-    local bgGrad = Instance.new("UIGradient")
-    bgGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(8, 24, 52)),
-        ColorSequenceKeypoint.new(0.55, Color3.fromRGB(7, 12, 22)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 34, 68))
-    })
-    bgGrad.Rotation = 135
-    bgGrad.Parent = container
-
-    local letterA = Instance.new("TextLabel")
-    letterA.Size = UDim2.new(1, 0, 0.54, 0)
-    letterA.Position = UDim2.new(0, 0, 0.04, 0)
-    letterA.BackgroundTransparency = 1
-    letterA.Text = "A"
-    letterA.TextColor3 = Color3.fromRGB(235, 244, 255)
-    letterA.TextSize = showFullTag and 20 or 15
-    letterA.Font = Enum.Font.GothamBlack
-    letterA.Parent = container
-
-    local andzText = Instance.new("TextLabel")
-    andzText.Size = UDim2.new(1, -2, 0.24, 0)
-    andzText.Position = UDim2.new(0, 1, 0.54, 0)
-    andzText.BackgroundTransparency = 1
-    andzText.Text = "ANDZ"
-    andzText.TextColor3 = Color3.fromRGB(240, 246, 255)
-    andzText.TextSize = showFullTag and 9 or 7
-    andzText.Font = Enum.Font.GothamBlack
-    andzText.Parent = container
-
-    local proxyText = Instance.new("TextLabel")
-    proxyText.Size = UDim2.new(1, 0, 0.18, 0)
-    proxyText.Position = UDim2.new(0, 0, 0.77, 0)
-    proxyText.BackgroundTransparency = 1
-    proxyText.Text = showFullTag and "-PROXY-" or "PROXY"
-    proxyText.TextColor3 = Color3.fromRGB(36, 185, 255)
-    proxyText.TextSize = showFullTag and 7 or 6
-    proxyText.Font = Enum.Font.GothamBold
-    proxyText.Parent = container
+for id, scriptid in pairs(GameList) do
+	if id == GameId then
+		isSupport = scriptid
+	end
 end
 
-local function applyTransparentMenuStyle(cardFrame, cornerRadius)
-    cardFrame.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
-    cardFrame.BackgroundTransparency = hasBgImage and 0.35 or 0.26
-
-    if hasBgImage and resolvedBg ~= "" then
-        local bgImg = Instance.new("ImageLabel")
-        bgImg.Name = "MenuBackgroundOkJpg"
-        bgImg.Size = UDim2.new(1, 0, 1, 0)
-        bgImg.Position = UDim2.new(0, 0, 0, 0)
-        bgImg.BackgroundTransparency = 1
-        bgImg.Image = resolvedBg
-        bgImg.ImageTransparency = 0.12
-        bgImg.ScaleType = Enum.ScaleType.Crop
-        bgImg.ZIndex = 0
-        bgImg.Parent = cardFrame
-
-        local bgCorner = Instance.new("UICorner")
-        bgCorner.CornerRadius = UDim.new(0, cornerRadius or 15)
-        bgCorner.Parent = bgImg
-
-        local darkScrim = Instance.new("Frame")
-        darkScrim.Name = "MenuReadabilityScrim"
-        darkScrim.Size = UDim2.new(1, 0, 1, 0)
-        darkScrim.Position = UDim2.new(0, 0, 0, 0)
-        darkScrim.BackgroundColor3 = Color3.fromRGB(10, 12, 18)
-        darkScrim.BackgroundTransparency = 0.52
-        darkScrim.BorderSizePixel = 0
-        darkScrim.ZIndex = 0
-        darkScrim.Parent = cardFrame
-
-        local scrimCorner = Instance.new("UICorner")
-        scrimCorner.CornerRadius = UDim.new(0, cornerRadius or 15)
-        scrimCorner.Parent = darkScrim
-    end
-
-    for _, child in ipairs(cardFrame:GetChildren()) do
-        if child:IsA("GuiObject") and child.Name ~= "MenuBackgroundOkJpg" and child.Name ~= "MenuReadabilityScrim" then
-            child.ZIndex = math.max(child.ZIndex, 2)
-        end
-    end
+if _G.loadCustomId then
+	isSupport = _G.loadCustomId
 end
 
-local function createDynamicTopBar(parentGuiObj, titleText, onRestore)
-    local pill = Instance.new("TextButton")
-    pill.Name = "DynamicTopIsland"
-    pill.AnchorPoint = Vector2.new(0.5, 0)
-    pill.Size = UDim2.new(0, 210, 0, 32)
-    pill.Position = UDim2.new(0.5, 0, 0, 8)
-    pill.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
-    pill.BackgroundTransparency = 0.18
-    pill.BorderSizePixel = 0
-    pill.Text = ""
-    pill.Visible = false
-    pill.Active = true
-    pill.Draggable = true
-    pill.ZIndex = 20
-    pill.Parent = parentGuiObj
+INFO_DOT25_QUAD = TweenInfo.new(.25, Enum.EasingStyle.Quad)
 
-    local pillCorner = Instance.new("UICorner")
-    pillCorner.CornerRadius = UDim.new(1, 0)
-    pillCorner.Parent = pill
-
-    local pillStroke = Instance.new("UIStroke")
-    pillStroke.Color = Color3.fromRGB(36, 185, 255)
-    pillStroke.Thickness = 1.4
-    pillStroke.Parent = pill
-
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 8, 0, 8)
-    dot.Position = UDim2.new(0, 12, 0.5, -4)
-    dot.BackgroundColor3 = Color3.fromRGB(36, 185, 255)
-    dot.BorderSizePixel = 0
-    dot.ZIndex = 21
-    dot.Parent = pill
-
-    local dotCorner = Instance.new("UICorner")
-    dotCorner.CornerRadius = UDim.new(1, 0)
-    dotCorner.Parent = dot
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -28, 1, 0)
-    lbl.Position = UDim2.new(0, 24, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = titleText .. " • Bấm để mở"
-    lbl.TextColor3 = Color3.fromRGB(245, 248, 255)
-    lbl.TextSize = 11
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextTruncate = Enum.TextTruncate.AtEnd
-    lbl.ZIndex = 21
-    lbl.Parent = pill
-
-    pill.MouseButton1Click:Connect(function()
-        pill.Visible = false
-        if onRestore then
-            onRestore()
-        end
-    end)
-
-    return pill
+function CoreGuiAdd(gui)
+	repeat wait() until pcall(function()
+		gui.Parent = CoreGui
+	end)
 end
 
--- ==========================================
--- ESP & MISC ENGINE
--- ==========================================
-local espState = {
-    Line = false,
-    Box = false,
-    Fov = false,
-    FovRadius = 120
+PreloadID = {
+	ANDZ_HUB_IMAGE_ID,
+	"rbxassetid://4560909609",
+	"rbxassetid://12187376174",
 }
+UI_LOCK = true
 
-local miscState = {
-    Fly = false,
-    FlySpeed = 55,
-    Speed = false,
-    WalkSpeed = 32
-}
-
-local defaultWalkSpeed = 16
-pcall(function()
-    local char = player.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then defaultWalkSpeed = hum.WalkSpeed end
-end)
-
-local hasDrawing = (pcall(function() return Drawing.new end) and Drawing) ~= nil
-local espOverlayGui = Instance.new("ScreenGui")
-espOverlayGui.Name = "AndzEspOverlay"
-espOverlayGui.ResetOnSpawn = false
-espOverlayGui.IgnoreGuiInset = true
-espOverlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-espOverlayGui.Parent = parentGui
-
-local fovGuiFrame = Instance.new("Frame")
-fovGuiFrame.Name = "FovCircleGui"
-fovGuiFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-fovGuiFrame.Position = UDim2.fromOffset(0, 0)
-fovGuiFrame.Size = UDim2.fromOffset(espState.FovRadius * 2, espState.FovRadius * 2)
-fovGuiFrame.BackgroundTransparency = 1
-fovGuiFrame.Visible = false
-fovGuiFrame.Parent = espOverlayGui
-
-local fovGuiCorner = Instance.new("UICorner")
-fovGuiCorner.CornerRadius = UDim.new(1, 0)
-fovGuiCorner.Parent = fovGuiFrame
-
-local fovGuiStroke = Instance.new("UIStroke")
-fovGuiStroke.Color = Color3.fromRGB(36, 185, 255)
-fovGuiStroke.Thickness = 1.6
-fovGuiStroke.Parent = fovGuiFrame
-
-local fovDrawingCircle = nil
-if hasDrawing then
-    pcall(function()
-        fovDrawingCircle = Drawing.new("Circle")
-        fovDrawingCircle.Thickness = 1.6
-        fovDrawingCircle.NumSides = 64
-        fovDrawingCircle.Radius = espState.FovRadius
-        fovDrawingCircle.Filled = false
-        fovDrawingCircle.Color = Color3.fromRGB(36, 185, 255)
-        fovDrawingCircle.Visible = false
-    end)
+function isNotLocked(v)
+	if not v:GetAttribute("Locked") and UI_LOCK == false then
+		return true
+	end
 end
 
-local playerVisuals = {}
+do
+	HOHO_Passcheck = Instance.new("ScreenGui")
+	INTRO = Instance.new("CanvasGroup")
+	Wallpaper = Instance.new("ImageLabel")
+	TextHolder = Instance.new("Frame")
+	Status = Instance.new("TextLabel")
+	UITextSizeConstraint = Instance.new("UITextSizeConstraint")
+	Gradient = Instance.new("Frame")
+	UIGradient = Instance.new("UIGradient")
+	Pattern = Instance.new("ImageLabel")
+	Logo = Instance.new("ImageLabel")
+	Main = Instance.new("ImageLabel")
+	UIAspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
+	Loader = Instance.new("Frame")
+	Content = Instance.new("Frame")
+	UIStroke = Instance.new("UIStroke")
+	ImageLabel = Instance.new("ImageLabel")
+	UIAspectRatioConstraint_1 = Instance.new("UIAspectRatioConstraint")
+	UICorner = Instance.new("UICorner")
+	GET_KEY = Instance.new("CanvasGroup")
+	UICorner_1 = Instance.new("UICorner")
+	Logo_1 = Instance.new("ImageLabel")
+	UIAspectRatioConstraint_2 = Instance.new("UIAspectRatioConstraint")
+	Get = Instance.new("TextButton")
+	UICorner_2 = Instance.new("UICorner")
+	UIStroke_1 = Instance.new("UIStroke")
+	Title = Instance.new("TextLabel")
+	Submit = Instance.new("TextButton")
+	UICorner_3 = Instance.new("UICorner")
+	UIStroke_2 = Instance.new("UIStroke")
+	Title_1 = Instance.new("TextLabel")
+	Pfp = Instance.new("ImageLabel")
+	UICorner_4 = Instance.new("UICorner")
+	Support = Instance.new("TextButton")
+	UICorner_5 = Instance.new("UICorner")
+	UIStroke_3 = Instance.new("UIStroke")
+	Title_2 = Instance.new("TextLabel")
+	Credit = Instance.new("TextLabel")
+	Close = Instance.new("TextButton")
+	Title_3 = Instance.new("TextLabel")
+	UIStroke_4 = Instance.new("UIStroke")
+	UICorner_6 = Instance.new("UICorner")
+	Frame = Instance.new("Frame")
+	UIStroke_5 = Instance.new("UIStroke")
+	UIGradient_2 = Instance.new("UIGradient")
+	UIGradient_3 = Instance.new("UIGradient")
+	UICorner_7 = Instance.new("UICorner")
+	Frame_1 = Instance.new("TextLabel")
+	Frame_2 = Instance.new("TextBox")
+	UIStroke_6 = Instance.new("UIStroke")
+	UICorner_8 = Instance.new("UICorner")
+	UICorner_9 = Instance.new("UICorner")
+	Gradient_1 = Instance.new("Frame")
+	UIGradient_1 = Instance.new("UIGradient")
+	Pattern_1 = Instance.new("ImageLabel")
+	Hover = Instance.new("ImageLabel")
+	local Hover_2
+	Gradient_Frame = Instance.new("Frame")
+	UIGradient_4 = Instance.new("UIGradient")
 
-local function createPlayerEsp(plr)
-    if plr == player or playerVisuals[plr] then return end
+	HOHO_Passcheck.IgnoreGuiInset = true
+	HOHO_Passcheck.ResetOnSpawn = false
+	HOHO_Passcheck.Name = "Andz_Passcheck"
+	HOHO_Passcheck.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+	HOHO_Passcheck.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	CoreGuiAdd(HOHO_Passcheck)
+	HOHO_Passcheck.Enabled = true
 
-    local item = {
-        drawingLine = nil,
-        drawingBox = nil,
-        guiLine = Instance.new("Frame"),
-        guiBox = Instance.new("Frame"),
-        guiBoxStroke = Instance.new("UIStroke")
-    }
+	INTRO.BorderSizePixel = 0
+	INTRO.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	INTRO.AnchorPoint = Vector2.new(0.5, 0.5)
+	INTRO.Size = UDim2.new(0.455271, 0, 0.46186, 0)
+	INTRO.ZIndex = 990
+	INTRO.Name = "INTRO"
+	INTRO.Position = UDim2.new(0.5, 0, 0.5, 0)
+	INTRO.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	INTRO.Parent = HOHO_Passcheck
 
-    item.guiLine.Name = "EspLine_" .. plr.Name
-    item.guiLine.BackgroundColor3 = Color3.fromRGB(36, 185, 255)
-    item.guiLine.BorderSizePixel = 0
-    item.guiLine.AnchorPoint = Vector2.new(0.5, 0.5)
-    item.guiLine.Visible = false
-    item.guiLine.Parent = espOverlayGui
+	Hover.ImageColor3 = Color3.fromRGB(255, 51, 51)
+	Hover.BorderSizePixel = 0
+	Hover.SliceCenter = Rect.new(205, 197, 828, 828)
+	Hover.ScaleType = Enum.ScaleType.Slice
+	Hover.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Hover.ImageTransparency = 1
+	Hover.Position = UDim2.new(0.5, 0, 0.5, 0)
+	Hover.Name = "Hover"
+	Hover.AnchorPoint = Vector2.new(0.5, 0.5)
+	Hover.Image = "rbxassetid://16261022724"
+	Hover.Size = UDim2.new(1.055, 0, 1.45, 0)
+	Hover.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Hover.BackgroundTransparency = 1
+	Hover.Parent = Get
 
-    item.guiBox.Name = "EspBox_" .. plr.Name
-    item.guiBox.BackgroundTransparency = 1
-    item.guiBox.BorderSizePixel = 0
-    item.guiBox.Visible = false
-    item.guiBox.Parent = espOverlayGui
+	Hover_2 = Hover:Clone()
+	Hover_2.Parent = Submit
 
-    item.guiBoxStroke.Color = Color3.fromRGB(255, 85, 85)
-    item.guiBoxStroke.Thickness = 1.5
-    item.guiBoxStroke.Parent = item.guiBox
+	Wallpaper.BorderSizePixel = 0
+	Wallpaper.ScaleType = Enum.ScaleType.Crop
+	Wallpaper.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Wallpaper.Position = UDim2.new(-0.0361702, 0, -0.158876, 0)
+	Wallpaper.Name = "Wallpaper"
+	Wallpaper.Image = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.Background or ANDZ_HUB_IMAGE_ID
+	Wallpaper.Size = UDim2.new(1.11064, 0, 1.59989, 0)
+	Wallpaper.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Wallpaper.Parent = INTRO
 
-    if hasDrawing then
-        pcall(function()
-            item.drawingLine = Drawing.new("Line")
-            item.drawingLine.Thickness = 1.5
-            item.drawingLine.Color = Color3.fromRGB(36, 185, 255)
-            item.drawingLine.Visible = false
+	TextHolder.BorderSizePixel = 0
+	TextHolder.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	TextHolder.Size = UDim2.new(1, 0, 0.284847, 0)
+	TextHolder.BorderColor3 = Color3.fromRGB(30, 30, 30)
+	TextHolder.Name = "TextHolder"
+	TextHolder.Position = UDim2.new(0, 0, 0.753631, 0)
+	TextHolder.Parent = INTRO
 
-            item.drawingBox = Drawing.new("Square")
-            item.drawingBox.Thickness = 1.5
-            item.drawingBox.Filled = false
-            item.drawingBox.Color = Color3.fromRGB(255, 85, 85)
-            item.drawingBox.Visible = false
-        end)
-    end
+	Status.TextWrapped = true
+	Status.BorderSizePixel = 0
+	Status.TextScaled = true
+	Status.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Status.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Italic)
+	Status.Position = UDim2.new(0.120042, 0, 0.254529, 0)
+	Status.Name = "Status"
+	Status.TextSize = 20
+	Status.Size = UDim2.new(0.79993, 0, 0.464041, 0)
+	Status.ZIndex = 2
+	Status.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Status.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Status.Text = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.IntroText or "ANDZ HUB - Preparing your experience..."
+	Status.BackgroundTransparency = 1
+	Status.Parent = TextHolder
+	Status:SetAttribute("EngText", Status.Text)
 
-    playerVisuals[plr] = item
+	UITextSizeConstraint.MaxTextSize = 20
+	UITextSizeConstraint.Parent = Status
+
+	Gradient.BorderSizePixel = 0
+	Gradient.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Gradient.Size = UDim2.new(1, 0, 1, 0)
+	Gradient.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Gradient.Name = "Gradient"
+	Gradient.Position = UDim2.new(0, 0, 2.11993e-08, 0)
+	Gradient.Parent = TextHolder
+
+	UIGradient.Transparency = NumberSequence.new{ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 0.9) }
+	UIGradient.Color = ColorSequence.new{ ColorSequenceKeypoint.new(0, Color3.fromRGB(157, 2, 31)), ColorSequenceKeypoint.new(0.466321, Color3.fromRGB(139.758, 6.07549, 31.0759)), ColorSequenceKeypoint.new(0.797927, Color3.fromRGB(46.7098, 28.0691, 31.4853)), ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 30, 30)) }
+	UIGradient.Rotation = -90
+	UIGradient.Parent = Gradient
+
+	Pattern.SliceCenter = Rect.new(0, 256, 0, 256)
+	Pattern.ScaleType = Enum.ScaleType.Tile
+	Pattern.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Pattern.ImageTransparency = 0.6
+	Pattern.Position = UDim2.new(6.64996e-05, 0, 0.00124399, 0)
+	Pattern.Name = "Pattern"
+	Pattern.Image = "rbxassetid://2151741365"
+	Pattern.TileSize = UDim2.new(0, 250, 0, 250)
+	Pattern.Size = UDim2.new(1, 0, 1, 0)
+	Pattern.ZIndex = 0
+	Pattern.BackgroundTransparency = 1
+	Pattern.Parent = Gradient
+
+	Logo.ImageColor3 = Color3.fromRGB(0, 0, 0)
+	Logo.BorderSizePixel = 0
+	Logo.ScaleType = Enum.ScaleType.Crop
+	Logo.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Logo.ImageTransparency = 0.5
+	Logo.Position = UDim2.new(0.271609, 0, 0.122057, 0)
+	Logo.Name = "Logo"
+	Logo.Image = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.Logo or ANDZ_HUB_IMAGE_ID
+	Logo.Size = UDim2.new(0.453191, 0, 0.550704, 0)
+	Logo.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Logo.ZIndex = 2
+	Logo.BackgroundTransparency = 1
+	Logo.Parent = INTRO
+
+	Main.BorderSizePixel = 0
+	Main.ScaleType = Enum.ScaleType.Crop
+	Main.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Main.Position = UDim2.new(0.5, 0, 0.5, 0)
+	Main.Name = "Main"
+	Main.AnchorPoint = Vector2.new(0.5, 0.5)
+	Main.Image = ANDZ_HUB_IMAGE_ID
+	Main.Size = UDim2.new(0.95, 0, 0.95, 0)
+	Main.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Main.BackgroundTransparency = 1
+	Main.Parent = Logo
+
+	UIAspectRatioConstraint.AspectRatio = 2.08357
+	UIAspectRatioConstraint.Parent = INTRO
+
+	Loader.BorderSizePixel = 0
+	Loader.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+	Loader.Size = UDim2.new(0.999948, 0, 0.0285966, 0)
+	Loader.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Loader.Name = "Loader"
+	Loader.Position = UDim2.new(0, 0, 0.751682, 0)
+	Loader.ZIndex = 2
+	Loader.Parent = INTRO
+
+	Content.BorderSizePixel = 0
+	Content.BackgroundColor3 = Color3.fromRGB(255, 51, 51)
+	Content.Size = UDim2.new(0.462745, 0, 1, 0)
+	Content.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Content.Name = "Content"
+	Content.Parent = Loader
+
+	UIStroke.Transparency = 0.5
+	UIStroke.Parent = Content
+
+	ImageLabel.ImageColor3 = Color3.fromRGB(255, 46, 46)
+	ImageLabel.BorderSizePixel = 0
+	ImageLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	ImageLabel.Position = UDim2.new(1, 0, .5, 0)
+	ImageLabel.AnchorPoint = Vector2.new(.5, .5)
+	ImageLabel.Image = "rbxassetid://16073652319"
+	ImageLabel.Size = UDim2.new(0.671884, 0, 15.1201, 0)
+	ImageLabel.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	ImageLabel.BackgroundTransparency = 1
+	ImageLabel.Parent = Content
+
+	UIAspectRatioConstraint_1.AspectRatio = 1.49814
+	UIAspectRatioConstraint_1.Parent = ImageLabel
+
+	UICorner.CornerRadius = UDim.new(0, 30)
+	UICorner.Parent = INTRO
+
+	GET_KEY.BorderSizePixel = 0
+	GET_KEY.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	GET_KEY.AnchorPoint = Vector2.new(0.5, 0.5)
+	GET_KEY.Size = UDim2.new(0.359117, 0, 0.665296, 0)
+	GET_KEY.ZIndex = 990
+	GET_KEY.Name = "GET_KEY"
+	GET_KEY.Position = UDim2.new(0.5, 0, 0.5, 0)
+	GET_KEY.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	GET_KEY.Parent = HOHO_Passcheck
+
+	local HubBgWallpaper = Instance.new("ImageLabel")
+	HubBgWallpaper.Name = "AndzHubWallpaper"
+	HubBgWallpaper.Size = UDim2.new(1, 0, 1, 0)
+	HubBgWallpaper.Position = UDim2.new(0, 0, 0, 0)
+	HubBgWallpaper.BackgroundTransparency = 1
+	HubBgWallpaper.Image = ANDZ_HUB_IMAGE_ID
+	HubBgWallpaper.ImageTransparency = 0.72
+	HubBgWallpaper.ScaleType = Enum.ScaleType.Crop
+	HubBgWallpaper.ZIndex = 0
+	HubBgWallpaper.Parent = GET_KEY
+
+	UICorner_1.CornerRadius = UDim.new(0.075, 0)
+	UICorner_1.Parent = GET_KEY
+
+	Logo_1.BorderSizePixel = 0
+	Logo_1.ScaleType = Enum.ScaleType.Crop
+	Logo_1.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Logo_1.Position = UDim2.new(0.256362, 0, 0.0700547, 0)
+	Logo_1.Name = "Logo"
+	Logo_1.Image = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.Logo or ANDZ_HUB_IMAGE_ID
+	Logo_1.Size = UDim2.new(0.481145, 0, 0.133585, 0)
+	Logo_1.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Logo_1.ZIndex = 2
+	Logo_1.BackgroundTransparency = 1
+	Logo_1.Parent = GET_KEY
+
+	UIAspectRatioConstraint_2.AspectRatio = 1.14096
+	UIAspectRatioConstraint_2.Parent = GET_KEY
+
+	Get.TextWrapped = true
+	Get.ZIndex = 2
+	Get.BorderSizePixel = 0
+	Get.AutoButtonColor = false
+	Get.TextScaled = true
+	Get.BackgroundColor3 = Color3.fromRGB(194, 3, 38)
+	Get.Position = UDim2.new(0.336, 0, 0.45377, 0)
+	Get.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Get.Name = "Get"
+	Get.AnchorPoint = Vector2.new(0.5, 0.5)
+	Get.Active = false
+	Get.TextSize = 20
+	Get.Size = UDim2.new(0.51, 0, 0.095, 0)
+	Get.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Get.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Get.Text = ""
+	Get.Selectable = false
+	Get.Parent = GET_KEY
+
+	UICorner_2.CornerRadius = UDim.new(0, 7)
+	UICorner_2.Parent = Get
+
+	UIStroke_1.Color = Color3.fromRGB(253, 1, 12)
+	UIStroke_1.Transparency = 0.5
+	UIStroke_1.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	UIStroke_1.Parent = Get
+
+	Title.TextWrapped = true
+	Title.BorderSizePixel = 0
+	Title.TextScaled = true
+	Title.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Title.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Title.Position = UDim2.new(0.5, 0, 0.5, 0)
+	Title.Name = "Title"
+	Title.AnchorPoint = Vector2.new(0.5, 0.5)
+	Title.Size = UDim2.new(1, 0, 0.546077, 0)
+	Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Title.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Title.Text = "GET KEY"
+	Title.BackgroundTransparency = 1
+	Title.Parent = Get
+	Title:SetAttribute("EngText", Title.Text)
+
+	Submit.TextWrapped = true
+	Submit.ZIndex = 2
+	Submit.BorderSizePixel = 0
+	Submit.AutoButtonColor = false
+	Submit.TextScaled = true
+	Submit.BackgroundColor3 = Color3.fromRGB(194, 3, 38)
+	Submit.Position = UDim2.new(0.50063, 0, 0.578448, 0)
+	Submit.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Submit.Name = "Submit"
+	Submit.AnchorPoint = Vector2.new(0.5, 0.5)
+	Submit.Active = false
+	Submit.TextSize = 20
+	Submit.Size = UDim2.new(0.838618, 0, 0.095, 0)
+	Submit.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Submit.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Submit.Text = ""
+	Submit.Selectable = false
+	Submit.Parent = GET_KEY
+
+	UICorner_3.CornerRadius = UDim.new(0, 7)
+	UICorner_3.Parent = Submit
+
+	UIStroke_2.Color = Color3.fromRGB(253, 1, 12)
+	UIStroke_2.Transparency = 0.5
+	UIStroke_2.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	UIStroke_2.Parent = Submit
+
+	Title_1.TextWrapped = true
+	Title_1.BorderSizePixel = 0
+	Title_1.TextScaled = true
+	Title_1.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Title_1.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Title_1.Position = UDim2.new(0.5, 0, 0.48, 0)
+	Title_1.Name = "Title"
+	Title_1.AnchorPoint = Vector2.new(0.5, 0.5)
+	Title_1.Size = UDim2.new(1, 0, 0.546, 0)
+	Title_1.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Title_1.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Title_1.Text = "SUBMIT KEY"
+	Title_1.BackgroundTransparency = 1
+	Title_1.Parent = Submit
+	Title_1:SetAttribute("EngText", Title_1.Text)
+
+	Get2 = Get:Clone()
+	Get2.Name = "Get2"
+	Get2.Position = UDim2.new(0.764, 0, 0.45377, 0)
+	Get2.Size = UDim2.new(0.312, 0, 0.095, 0)
+	Get2.Title.Text = "How To Get Key"
+	Get2.Parent = GET_KEY
+
+	Pfp.BorderSizePixel = 0
+	Pfp.ScaleType = Enum.ScaleType.Crop
+	Pfp.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Pfp.Position = UDim2.new(0.0810142, 0, 0.652851, 0)
+	Pfp.Name = "Pfp"
+	Pfp.Image = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+	Pfp.Size = UDim2.new(0.229672, 0, 0.261163, 0)
+	Pfp.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Pfp.ZIndex = 2
+	Pfp.BackgroundTransparency = 1
+	Pfp.Parent = GET_KEY
+
+	UICorner_4.CornerRadius = UDim.new(0.075, 0)
+	UICorner_4.Parent = Pfp
+
+	Support.TextWrapped = true
+	Support.ZIndex = 2
+	Support.BorderSizePixel = 0
+	Support.AutoButtonColor = false
+	Support.TextScaled = true
+	Support.BackgroundColor3 = Color3.fromRGB(248, 4, 46)
+	Support.Position = UDim2.new(0.626422, 0, 0.765503, 0)
+	Support.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Support.Name = "Support"
+	Support.AnchorPoint = Vector2.new(0.5, 0.5)
+	Support.Active = false
+	Support.TextSize = 20
+	Support.Size = UDim2.new(0.58195, 0, 0.0811856, 0)
+	Support.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Support.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Support.Text = ""
+	Support.BackgroundTransparency = 1
+	Support.Selectable = false
+	Support.Parent = GET_KEY
+
+	UICorner_5.CornerRadius = UDim.new(0, 7)
+	UICorner_5.Parent = Support
+
+	UIStroke_3.Color = Color3.fromRGB(253, 1, 12)
+	UIStroke_3.Thickness = 1.25
+	UIStroke_3.Transparency = 0.25
+	UIStroke_3.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	UIStroke_3.Parent = Support
+
+	Title_2.TextWrapped = true
+	Title_2.BorderSizePixel = 0
+	Title_2.TextScaled = true
+	Title_2.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Title_2.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+	Title_2.Position = UDim2.new(0.5, 0, 0.5, 0)
+	Title_2.Name = "Title"
+	Title_2.AnchorPoint = Vector2.new(0.5, 0.5)
+	Title_2.Size = UDim2.new(1, 0, 0.6, 0)
+	Title_2.TextColor3 = Color3.fromRGB(248, 4, 46)
+	Title_2.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Title_2.Text = "ANDZ HUB"
+	Title_2.BackgroundTransparency = 1
+	Title_2.Parent = Support
+	Title_2:SetAttribute("EngText", Title_2.Text)
+
+	Credit.TextWrapped = true
+	Credit.BorderSizePixel = 0
+	Credit.RichText = true
+	Credit.TextScaled = true
+	Credit.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Credit.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+	Credit.Position = UDim2.new(0.627693, 0, 0.67966, 0)
+	Credit.Name = "Credit"
+	Credit.AnchorPoint = Vector2.new(0.5, 0.5)
+	Credit.Size = UDim2.new(0.584491, 0, 0.0536177, 0)
+	Credit.ZIndex = 2
+	Credit.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Credit.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Credit.Text = [[<font color="#f8042e">ANDZ HUB</font> | <font color="#5d6af2">KEY VERIFICATION</font>]]
+	if IS_CUSTOM_UI_MODE then
+		local yt = '<font color="#f8042e">YT</font> @' .. (CUSTOM_UI_MODE_DATA.YouTube or "ANDZ")
+		local dc = '<font color="#5d6af2">HUB</font> ' .. (CUSTOM_UI_MODE_DATA.Discord or "ANDZ HUB")
+		Credit.Text = yt .. " | " .. dc
+	end
+	Credit.BackgroundTransparency = 1
+	Credit.Parent = GET_KEY
+
+	Close.TextWrapped = true
+	Close.ZIndex = 2
+	Close.BorderSizePixel = 0
+	Close.AutoButtonColor = false
+	Close.TextScaled = true
+	Close.BackgroundColor3 = Color3.fromRGB(248, 4, 46)
+	Close.Position = UDim2.new(0.626422, 0, 0.871296, 0)
+	Close.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	Close.Name = "Close"
+	Close.AnchorPoint = Vector2.new(0.5, 0.5)
+	Close.Active = false
+	Close.TextSize = 20
+	Close.Size = UDim2.new(0.582, 0, 0.081, 0)
+	Close.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Close.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Close.Text = ""
+	Close.BackgroundTransparency = 1
+	Close.Selectable = false
+	Close.Parent = GET_KEY
+
+	Title_3.TextWrapped = true
+	Title_3.BorderSizePixel = 0
+	Title_3.TextScaled = true
+	Title_3.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Title_3.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+	Title_3.Position = UDim2.new(0.5, 0, 0.5, 0)
+	Title_3.Name = "Title"
+	Title_3.AnchorPoint = Vector2.new(0.5, 0.5)
+	Title_3.Size = UDim2.new(1, 0, 0.6, 0)
+	Title_3.TextColor3 = Color3.fromRGB(248, 4, 46)
+	Title_3.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Title_3.Text = "CLOSE UI"
+	Title_3.BackgroundTransparency = 1
+	Title_3.Parent = Close
+	Title_3:SetAttribute("EngText", Title_3.Text)
+
+	UIStroke_4.Color = Color3.fromRGB(253, 1, 12)
+	UIStroke_4.Thickness = 1.25
+	UIStroke_4.Transparency = 0.25
+	UIStroke_4.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	UIStroke_4.Parent = Close
+
+	UICorner_6.CornerRadius = UDim.new(0, 7)
+	UICorner_6.Parent = Close
+
+	Frame.BorderSizePixel = 0
+	Frame.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+	Frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	Frame.Size = UDim2.new(0.838618, 0, 0.11308, 0)
+	Frame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Frame.Position = UDim2.new(0.50063, 0, 0.308795, 0)
+	Frame.ZIndex = 2
+	Frame.Parent = GET_KEY
+
+	UIStroke_5.Color = Color3.fromRGB(255, 255, 255)
+	UIStroke_5.Thickness = 1.25
+	UIStroke_5.Transparency = 0.5
+	UIStroke_5.Parent = Frame
+
+	UIGradient_2.Transparency = NumberSequence.new{ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.9, 0.995), NumberSequenceKeypoint.new(1, 1) }
+	UIGradient_2.Rotation = -90
+	UIGradient_2.Color = ColorSequence.new(Color3.fromRGB(248, 4, 46))
+	UIGradient_2.Parent = UIStroke_5
+
+	UIStroke_5.Thickness = 2
+
+	UIGradient_3.Transparency = NumberSequence.new{ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.9, 0.995), NumberSequenceKeypoint.new(1, 1) }
+	UIGradient_3.Rotation = -90
+	UIGradient_3.Parent = UIStroke_6
+
+	UICorner_7.CornerRadius = UDim.new(0, 7)
+
+	Frame_1.TextWrapped = true
+	Frame_1.BorderSizePixel = 0
+	Frame_1.TextScaled = true
+	UICorner_7.Parent = Frame
+	Frame_1.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+	Frame_1.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+	Frame_1.Position = UDim2.new(0.265781, 0, 0.485383, 0)
+	Frame_1.Name = "Title"
+	Frame_1.AnchorPoint = Vector2.new(0.5, 0.5)
+	Frame_1.Size = UDim2.new(0.393164, 0, 0.523336, 0)
+	Frame_1.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Frame_1.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Frame_1.Text = "ENTER KEY HERE"
+	Frame_1.BackgroundTransparency = 1
+	Frame_1.TextXAlignment = Enum.TextXAlignment.Left
+	Frame_1.Parent = Frame
+	Frame_1:SetAttribute("EngText", Frame_1.Text)
+
+	Frame_2.TextWrapped = true
+	Frame_2.BorderSizePixel = 0
+	Frame_2.Position = UDim2.new(0.780933, 0, 0.498203, 0)
+	Frame_2.TextScaled = true
+	Frame_2.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+	Frame_2.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+	Frame_2.Active = true
+	Frame_2.AnchorPoint = Vector2.new(0.5, 0.5)
+	Frame_2.PlaceholderText = "..."
+	Frame_2.Size = UDim2.new(0.302255, 0, 0.600259, 0)
+	Frame_2.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Frame_2.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Frame_2.Text = ""
+	Frame_2.Selectable = false
+	Frame_2.Name = "Textbox"
+	Frame_2.Parent = Frame
+
+	UIStroke_6.Color = Color3.fromRGB(248, 4, 46)
+	UIStroke_6.Thickness = 1.25
+	UIStroke_6.Transparency = 0.5
+	UIStroke_6.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	UIStroke_6.Parent = Frame_2
+
+	UICorner_8.CornerRadius = UDim.new(0, 7)
+	UICorner_8.Parent = Frame_2
+
+	Gradient_1.BorderSizePixel = 0
+	Gradient_1.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Gradient_1.Size = UDim2.new(1, 0, 1, 0)
+	Gradient_1.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Gradient_1.Name = "Gradient"
+	Gradient_1.Position = UDim2.new(0, 0, 2.11993e-08, 0)
+	Gradient_1.Parent = GET_KEY
+
+	UIGradient_1.Transparency = NumberSequence.new{ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 0.9) }
+	UIGradient_1.Color = ColorSequence.new{ ColorSequenceKeypoint.new(0, Color3.fromRGB(157, 2, 31)), ColorSequenceKeypoint.new(0.468048, Color3.fromRGB(46.7098, 28.0691, 31.4853)), ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 30, 30)) }
+	UIGradient_1.Rotation = -90
+	UIGradient_1.Parent = Gradient_1
+
+	Pattern_1.SliceCenter = Rect.new(0, 256, 0, 256)
+	Pattern_1.ScaleType = Enum.ScaleType.Tile
+	Pattern_1.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Pattern_1.ImageTransparency = 0.6
+	Pattern_1.Position = UDim2.new(6.64996e-05, 0, 0.00124399, 0)
+	Pattern_1.Name = "Pattern"
+	Pattern_1.Image = "rbxassetid://2151741365"
+	Pattern_1.TileSize = UDim2.new(0, 250, 0, 250)
+	Pattern_1.Size = UDim2.new(1, 0, 1, 0)
+	Pattern_1.ZIndex = 0
+	Pattern_1.BackgroundTransparency = 1
+	Pattern_1.Parent = Gradient_1
+
+	Gradient_Frame.BorderSizePixel = 0
+	Gradient_Frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Gradient_Frame.Size = UDim2.new(1, 0, 1, 0)
+	Gradient_Frame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	Gradient_Frame.Name = "Gradient"
+	Gradient_Frame.Position = UDim2.new(0, 0, 2.11993e-08, 0)
+	Gradient_Frame.ZIndex = 0
+	Gradient_Frame.BackgroundTransparency = 1
+	Gradient_Frame.Parent = Frame
+
+	UIGradient_4.Color = ColorSequence.new{ ColorSequenceKeypoint.new(0, Color3.fromRGB(109, 1, 23)), ColorSequenceKeypoint.new(0.531952, Color3.fromRGB(39.5556, 18.9764, 22.7252)), ColorSequenceKeypoint.new(1, Color3.fromRGB(24, 18, 19)) }
+	UIGradient_4.Rotation = -90
+	UIGradient_4.Parent = Gradient_Frame
+
+	UICorner_9.CornerRadius = UDim.new(0, 10)
+	UICorner_9.Parent = Gradient_Frame
+
+	HOHO_Gen4 = Instance.new("ScreenGui")
+	NOTIFICATION_ZONE = Instance.new("Frame")
+	UIListLayout_Main = Instance.new("UIListLayout")
+	UIAspectRatioConstraint_Main = Instance.new("UIAspectRatioConstraint")
+
+	HOHO_Gen4.IgnoreGuiInset = true
+	HOHO_Gen4.Enabled = true
+	HOHO_Gen4.ResetOnSpawn = false
+	HOHO_Gen4.Name = "Andz_Gen4"
+	HOHO_Gen4.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+	HOHO_Gen4.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	CoreGuiAdd(HOHO_Gen4)
+
+	NOTIFICATION_ZONE.BorderSizePixel = 0
+	NOTIFICATION_ZONE.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	NOTIFICATION_ZONE.AnchorPoint = Vector2.new(1, 1)
+	NOTIFICATION_ZONE.Size = UDim2.new(0.213415, 0, 1, 0)
+	NOTIFICATION_ZONE.ClipsDescendants = true
+	NOTIFICATION_ZONE.BorderColor3 = Color3.fromRGB(0, 0, 0)
+	NOTIFICATION_ZONE.BackgroundTransparency = 1
+	NOTIFICATION_ZONE.Name = "NOTIFICATION_ZONE"
+	NOTIFICATION_ZONE.Position = UDim2.new(1, 0, 1, 0)
+	NOTIFICATION_ZONE.Parent = HOHO_Gen4
+
+	UIListLayout_Main.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	UIListLayout_Main.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	UIListLayout_Main.SortOrder = Enum.SortOrder.LayoutOrder
+	UIListLayout_Main.Parent = NOTIFICATION_ZONE
+
+	UIAspectRatioConstraint_Main.AspectRatio = 0.424757
+	UIAspectRatioConstraint_Main.Parent = NOTIFICATION_ZONE
+
+	GET_KEY.Visible = false
+	INTRO.GroupTransparency = 1
+	GET_KEY.GroupTransparency = 1
+
+	local function EnterKey(v)
+		local textbox = v["Textbox"]
+		local gradient = v.Gradient
+		local stroke = v.UIStroke
+
+		local tween_1_in = TweenService:Create(gradient, INFO_DOT25_QUAD, {BackgroundTransparency = 0})
+		local tween_2_in = TweenService:Create(stroke.UIGradient, INFO_DOT25_QUAD, {Offset = Vector2.new(0, -.5)})
+
+		local tween_1_out = TweenService:Create(gradient, INFO_DOT25_QUAD, {BackgroundTransparency = 1})
+		local tween_2_out = TweenService:Create(stroke.UIGradient, INFO_DOT25_QUAD, {Offset = Vector2.new(0, 0)})
+
+		textbox.Focused:Connect(function()
+			tween_1_in:Play()
+			tween_2_in:Play()
+		end)
+
+		textbox.FocusLost:Connect(function()
+			tween_1_out:Play()
+			tween_2_out:Play()
+		end)
+	end
+
+	EnterKey(Frame)
+
+	for i, v in pairs({Get, Submit, Close, Support}) do
+		if isNotLocked(v) then
+			if v == Get or v == Submit then
+				v.MouseEnter:Connect(function()
+					TweenService:Create(v.Hover, INFO_DOT25_QUAD, {ImageTransparency = .25}):Play()
+				end)
+				v.MouseLeave:Connect(function()
+					TweenService:Create(v.Hover, INFO_DOT25_QUAD, {ImageTransparency = 1}):Play()
+				end)
+			else
+				v.MouseEnter:Connect(function()
+					TweenService:Create(v, INFO_DOT25_QUAD, {BackgroundTransparency = .1}):Play()
+					TweenService:Create(v["Title"], INFO_DOT25_QUAD, {TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
+				end)
+				v.MouseLeave:Connect(function()
+					TweenService:Create(v, INFO_DOT25_QUAD, {BackgroundTransparency = 1}):Play()
+					TweenService:Create(v["Title"], INFO_DOT25_QUAD, {TextColor3 = Color3.fromRGB(248, 4, 46)}):Play()
+				end)
+			end
+		end
+	end
+
+	if (isfile("HoHo_Intro.txt") and (tick() - tonumber(readfile("HoHo_Intro.txt"))) >= 86400) or not isfile("HoHo_Intro.txt") then
+		writefile("HoHo_Intro.txt", tostring(tick()))
+
+		local preload_content = {}
+		for i, v in pairs(HOHO_Passcheck:GetDescendants()) do
+			table.insert(preload_content, v)
+		end
+		for i, v in pairs(PreloadID) do
+			table.insert(preload_content, v)
+		end
+
+		ContentProvider:PreloadAsync(preload_content)
+
+		Content.Size = UDim2.new(0, 0, 1, 0)
+
+		TweenService:Create(INTRO, INFO_DOT25_QUAD, {GroupTransparency = 0}):Play()
+		task.wait(.5)
+		for i = 1, #preload_content do
+			local progress = i / #preload_content
+			TweenService:Create(Content, TweenInfo.new(.1, Enum.EasingStyle.Quad), {Size = UDim2.new(progress, 0, 1, 0)}):Play()
+			task.wait(math.random(1, 5) / 50)
+		end
+
+		TweenService:Create(INTRO, INFO_DOT25_QUAD, {GroupTransparency = 1}):Play()
+		task.wait(.5)
+	end
+
+	GET_KEY.Visible = true
+	TweenService:Create(GET_KEY, INFO_DOT25_QUAD, {GroupTransparency = 0}):Play()
+
+	local checking_key = false
+
+	local destroyUI = function()
+		if HOHO_Passcheck and HOHO_Passcheck.Parent then
+			HOHO_Passcheck:Destroy()
+		end
+		if HOHO_Gen4 and HOHO_Gen4.Parent then
+			HOHO_Gen4:Destroy()
+		end
+	end
+
+	local runPostKeyPayload = function(key)
+		script_key = key
+		getfenv(0).script_key = key
+		getfenv(1).script_key = key
+		getgenv().script_key = key
+
+		if ANDZ_LOAD_AFTER_VALID ~= "" then
+			pcall(function()
+				if ANDZ_LOAD_AFTER_VALID:match("^https?://") then
+					local okSrc, src = andzHttpGet(ANDZ_LOAD_AFTER_VALID)
+					if okSrc and src ~= "" then
+						loadstring(src)()
+					end
+				else
+					loadstring(ANDZ_LOAD_AFTER_VALID)()
+				end
+			end)
+		end
+	end
+
+	local do_check_key = function(key)
+		if checking_key then return end
+		checking_key = true
+
+		key = tostring(key or ""):gsub("[\r\n%z]", " "):gsub("[ \t]", ""):gsub("[ \n]", ""):gsub("[ \t]+%f[\r\n%z]", "")
+		if key == "" then
+			StarterGui:SetCore("SendNotification", {
+				Title = "ANDZ HUB",
+				Text = "Vui lòng nhập key kích hoạt!",
+				Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+			})
+			checking_key = false
+			return
+		end
+
+		Submit.Title.Text = "CHECKING..."
+		local status = andzCheckKey(key)
+		Submit.Title.Text = Submit.Title:GetAttribute("EngText") or "SUBMIT KEY"
+
+		StarterGui:SetCore("SendNotification", {
+			Title = "ANDZ HUB",
+			Text = "[" .. tostring(status.code) .. "] " .. tostring(status.message),
+			Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+		})
+
+		if status.code == "KEY_VALID" then
+			TweenService:Create(GET_KEY, INFO_DOT25_QUAD, {GroupTransparency = 1}):Play()
+			delay(0.2, destroyUI)
+
+			pcall(function()
+				if writefile then
+					writefile(ANDZ_SAVE_FILE, key)
+				end
+			end)
+
+			task.wait(.25)
+			runPostKeyPayload(key)
+		elseif status.code == "KEY_HWID_LOCKED" then
+			StarterGui:SetCore("SendNotification", {
+				Title = "ANDZ HUB",
+				Text = "Key bị khóa HWID khác: " .. tostring(status.message),
+				Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+			})
+		else
+			pcall(function()
+				if isfile and delfile and isfile(ANDZ_SAVE_FILE) then
+					delfile(ANDZ_SAVE_FILE)
+				end
+			end)
+		end
+
+		checking_key = false
+	end
+
+	local ABCXYZ = function()
+		local key = Frame.Textbox.Text
+		do_check_key(key)
+	end
+	Submit.MouseButton1Click:Connect(ABCXYZ)
+
+	Support.MouseButton1Click:Connect(function()
+		pcall(function()
+			if setclipboard then
+				setclipboard(ANDZ_GET_KEY_URL)
+			end
+		end)
+		StarterGui:SetCore("SendNotification", {
+			Title = "ANDZ HUB",
+			Text = "Đã sao chép link get key!",
+			Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+		})
+	end)
+
+	Close.MouseButton1Click:Once(function()
+		UI_LOCK = true
+		TweenService:Create(GET_KEY, INFO_DOT25_QUAD, {GroupTransparency = 1}):Play()
+		delay(0.2, destroyUI)
+		Result = nil
+	end)
+
+	Get.MouseButton1Click:Connect(function()
+		local link = ANDZ_GET_KEY_URL
+		if IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA and CUSTOM_UI_MODE_DATA.GetKeyLink then
+			link = CUSTOM_UI_MODE_DATA.GetKeyLink
+		end
+		pcall(function()
+			if setclipboard then
+				setclipboard(link)
+			end
+		end)
+		StarterGui:SetCore("SendNotification", {
+			Title = "ANDZ HUB",
+			Text = "Đã sao chép link Get Key!",
+			Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+		})
+	end)
+
+	Get2.MouseButton1Click:Connect(function()
+		local tutLink = (IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA and CUSTOM_UI_MODE_DATA.TutorialLink) or ANDZ_GET_KEY_URL
+		pcall(function()
+			if setclipboard then
+				setclipboard(tutLink)
+			end
+		end)
+		StarterGui:SetCore("SendNotification", {
+			Title = "ANDZ HUB",
+			Text = "Đã sao chép hướng dẫn Get Key!",
+			Icon = IS_CUSTOM_UI_MODE and CUSTOM_UI_MODE_DATA.CommunityIcon or ANDZ_HUB_IMAGE_ID
+		})
+	end)
+
+	do
+		local savedKey = nil
+		if _G.MY_KEY_IS and tostring(_G.MY_KEY_IS) ~= "" then
+			savedKey = tostring(_G.MY_KEY_IS)
+		elseif isfile and readfile and isfile(ANDZ_SAVE_FILE) then
+			savedKey = tostring(readfile(ANDZ_SAVE_FILE))
+		end
+
+		if savedKey and savedKey ~= "" then
+			Frame.Textbox.Text = savedKey
+			do_check_key(savedKey)
+		end
+	end
 end
-
-local function removePlayerEsp(plr)
-    local item = playerVisuals[plr]
-    if not item then return end
-    pcall(function()
-        if item.drawingLine then item.drawingLine:Remove() end
-        if item.drawingBox then item.drawingBox:Remove() end
-        if item.guiLine then item.guiLine:Destroy() end
-        if item.guiBox then item.guiBox:Destroy() end
-    end)
-    playerVisuals[plr] = nil
-end
-
-for _, plr in ipairs(Players:GetPlayers()) do
-    if plr ~= player then
-        createPlayerEsp(plr)
-    end
-end
-Players.PlayerAdded:Connect(createPlayerEsp)
-Players.PlayerRemoving:Connect(removePlayerEsp)
-
-local function hideEspItem(item)
-    item.guiLine.Visible = false
-    item.guiBox.Visible = false
-    if item.drawingLine then item.drawingLine.Visible = false end
-    if item.drawingBox then item.drawingBox.Visible = false end
-end
-
-local function updateGuiLine(frame, p1, p2)
-    local dx = p2.X - p1.X
-    local dy = p2.Y - p1.Y
-    local dist = math.sqrt(dx * dx + dy * dy)
-    if dist < 2 or dist > 2500 then
-        frame.Visible = false
-        return
-    end
-    frame.Size = UDim2.fromOffset(dist, 1.5)
-    frame.Position = UDim2.fromOffset((p1.X + p2.X) * 0.5, (p1.Y + p2.Y) * 0.5)
-    frame.Rotation = math.deg(math.atan2(dy, dx))
-    frame.Visible = true
-end
-
-local flyBodyVel = nil
-local flyBodyGyro = nil
-
-local function cleanupFly()
-    if flyBodyVel then
-        pcall(function() flyBodyVel:Destroy() end)
-        flyBodyVel = nil
-    end
-    if flyBodyGyro then
-        pcall(function() flyBodyGyro:Destroy() end)
-        flyBodyGyro = nil
-    end
-    local char = player.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function() hum.PlatformStand = false end)
-    end
-end
-
-local function updateFlyAndSpeed()
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not char or not hrp or not hum or hum.Health <= 0 then
-        cleanupFly()
-        return
-    end
-
-    if miscState.Speed then
-        hum.WalkSpeed = miscState.WalkSpeed
-    else
-        hum.WalkSpeed = defaultWalkSpeed
-    end
-
-    if miscState.Fly then
-        hum.PlatformStand = true
-        if not flyBodyVel or flyBodyVel.Parent ~= hrp then
-            cleanupFly()
-            hum.PlatformStand = true
-            flyBodyVel = Instance.new("BodyVelocity")
-            flyBodyVel.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-            flyBodyVel.Velocity = Vector3.zero
-            flyBodyVel.Parent = hrp
-
-            flyBodyGyro = Instance.new("BodyGyro")
-            flyBodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-            flyBodyGyro.P = 9e4
-            flyBodyGyro.CFrame = hrp.CFrame
-            flyBodyGyro.Parent = hrp
-        end
-
-        local cam = workspace.CurrentCamera
-        local moveDir = hum.MoveDirection
-        local vel = Vector3.zero
-
-        if moveDir.Magnitude > 0.05 then
-            local lookFlat = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
-            local forward = Vector3.new(lookFlat.X, 0, lookFlat.Z)
-            if forward.Magnitude > 0.001 then
-                forward = forward.Unit
-                local right = Vector3.new(-forward.Z, 0, forward.X)
-                local fwdAmt = moveDir:Dot(forward)
-                local rightAmt = moveDir:Dot(right)
-                local aimDir = (cam.CFrame.LookVector * fwdAmt + right * rightAmt)
-                if aimDir.Magnitude > 0.001 then
-                    vel = aimDir.Unit * miscState.FlySpeed
-                end
-            else
-                vel = moveDir.Unit * miscState.FlySpeed
-            end
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.E) then
-            vel = vel + Vector3.new(0, miscState.FlySpeed, 0)
-        elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then
-            vel = vel - Vector3.new(0, miscState.FlySpeed, 0)
-        end
-
-        flyBodyVel.Velocity = vel
-        if cam then
-            flyBodyGyro.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + cam.CFrame.LookVector)
-        end
-    else
-        cleanupFly()
-    end
-end
-
-RunService.RenderStepped:Connect(function()
-    updateFlyAndSpeed()
-
-    Camera = workspace.CurrentCamera
-    if not Camera then return end
-
-    local vp = Camera.ViewportSize
-    local centerScreen = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
-    local originLine = Vector2.new(vp.X * 0.5, vp.Y)
-
-    fovGuiFrame.Visible = espState.Fov
-    fovGuiFrame.Position = UDim2.fromOffset(centerScreen.X, centerScreen.Y)
-    fovGuiFrame.Size = UDim2.fromOffset(espState.FovRadius * 2, espState.FovRadius * 2)
-
-    if fovDrawingCircle then
-        fovDrawingCircle.Visible = espState.Fov
-        fovDrawingCircle.Position = centerScreen
-        fovDrawingCircle.Radius = espState.FovRadius
-    end
-
-    for plr, item in pairs(playerVisuals) do
-        if not plr.Parent or (not espState.Line and not espState.Box) then
-            hideEspItem(item)
-        else
-            local char = plr.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local head = char and char:FindFirstChild("Head")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-
-            if not hrp or not head or not hum or hum.Health <= 0 then
-                hideEspItem(item)
-            else
-                local rootPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-                if not onScreen or rootPos.Z <= 0 then
-                    hideEspItem(item)
-                else
-                    local topPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.6, 0))
-                    local botPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3.0, 0))
-
-                    local height = math.max(12, math.abs(botPos.Y - topPos.Y))
-                    local width = math.max(8, height * 0.58)
-                    local boxTopLeft = Vector2.new(rootPos.X - width * 0.5, topPos.Y)
-                    local footPoint = Vector2.new(rootPos.X, botPos.Y)
-
-                    if espState.Line then
-                        if item.drawingLine then
-                            item.drawingLine.From = originLine
-                            item.drawingLine.To = footPoint
-                            item.drawingLine.Visible = true
-                            item.guiLine.Visible = false
-                        else
-                            updateGuiLine(item.guiLine, originLine, footPoint)
-                        end
-                    else
-                        item.guiLine.Visible = false
-                        if item.drawingLine then item.drawingLine.Visible = false end
-                    end
-
-                    if espState.Box then
-                        if item.drawingBox then
-                            item.drawingBox.Size = Vector2.new(width, height)
-                            item.drawingBox.Position = boxTopLeft
-                            item.drawingBox.Visible = true
-                            item.guiBox.Visible = false
-                        else
-                            item.guiBox.Size = UDim2.fromOffset(width, height)
-                            item.guiBox.Position = UDim2.fromOffset(boxTopLeft.X, boxTopLeft.Y)
-                            item.guiBox.Visible = true
-                        end
-                    else
-                        item.guiBox.Visible = false
-                        if item.drawingBox then item.drawingBox.Visible = false end
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- ==========================================
--- MAIN HUB (ESP + MISC + INFO)
--- ==========================================
-local function openMainHub()
-    local espGui = Instance.new("ScreenGui")
-    espGui.Name = "AndzEspHub"
-    espGui.ResetOnSpawn = false
-    espGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    espGui.Parent = parentGui
-
-    local espToggleBtn = Instance.new("ImageButton")
-    espToggleBtn.Name = "EspToggleBtn"
-    espToggleBtn.Size = UDim2.new(0, 56, 0, 56)
-    espToggleBtn.Position = UDim2.new(0, 14, 0.5, -28)
-    espToggleBtn.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
-    espToggleBtn.BorderSizePixel = 0
-    espToggleBtn.Image = resolvedLogo
-    espToggleBtn.ScaleType = Enum.ScaleType.Crop
-    espToggleBtn.Active = true
-    espToggleBtn.Draggable = true
-    espToggleBtn.Parent = espGui
-
-    local espBtnCorner = Instance.new("UICorner")
-    espBtnCorner.CornerRadius = UDim.new(1, 0)
-    espBtnCorner.Parent = espToggleBtn
-
-    local espBtnStroke = Instance.new("UIStroke")
-    espBtnStroke.Color = Color3.fromRGB(36, 185, 255)
-    espBtnStroke.Thickness = 2
-    espBtnStroke.Parent = espToggleBtn
-
-    buildAndzBadge(espToggleBtn, true)
-
-    local espCard = Instance.new("Frame")
-    espCard.Name = "EspMainCard"
-    espCard.Size = UDim2.new(0, 360, 0, 232)
-    espCard.Position = UDim2.new(0.5, -180, 0.5, -116)
-    espCard.BackgroundColor3 = Color3.fromRGB(16, 16, 18)
-    espCard.BorderSizePixel = 0
-    espCard.Active = true
-    espCard.Draggable = true
-    espCard.Visible = true
-    espCard.Parent = espGui
-
-    local espCardCorner = Instance.new("UICorner")
-    espCardCorner.CornerRadius = UDim.new(0, 15)
-    espCardCorner.Parent = espCard
-
-    local espCardStroke = Instance.new("UIStroke")
-    espCardStroke.Color = Color3.fromRGB(42, 42, 48)
-    espCardStroke.Thickness = 1
-    espCardStroke.Parent = espCard
-
-    local hubDynamicBar = createDynamicTopBar(espGui, "ANDZ HUB", function()
-        espCard.Visible = true
-    end)
-
-    local function setHubVisible(state)
-        espCard.Visible = state
-        if state then
-            hubDynamicBar.Visible = false
-        end
-    end
-
-    local espTitle = Instance.new("TextLabel")
-    espTitle.Size = UDim2.new(1, -108, 0, 20)
-    espTitle.Position = UDim2.new(0, 16, 0, 10)
-    espTitle.BackgroundTransparency = 1
-    espTitle.Text = "ANDZ HUB"
-    espTitle.TextColor3 = Color3.fromRGB(245, 245, 248)
-    espTitle.TextSize = 15
-    espTitle.Font = Enum.Font.GothamBold
-    espTitle.TextXAlignment = Enum.TextXAlignment.Left
-    espTitle.Parent = espCard
-
-    local minEspBtn = Instance.new("TextButton")
-    minEspBtn.Size = UDim2.new(0, 24, 0, 24)
-    minEspBtn.Position = UDim2.new(1, -62, 0, 10)
-    minEspBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-    minEspBtn.BackgroundTransparency = 0.2
-    minEspBtn.Text = "-"
-    minEspBtn.TextColor3 = Color3.fromRGB(36, 185, 255)
-    minEspBtn.TextSize = 15
-    minEspBtn.Font = Enum.Font.GothamBold
-    minEspBtn.Parent = espCard
-
-    local minEspCorner = Instance.new("UICorner")
-    minEspCorner.CornerRadius = UDim.new(0, 7)
-    minEspCorner.Parent = minEspBtn
-
-    local hideEspBtn = Instance.new("TextButton")
-    hideEspBtn.Size = UDim2.new(0, 24, 0, 24)
-    hideEspBtn.Position = UDim2.new(1, -34, 0, 10)
-    hideEspBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-    hideEspBtn.BackgroundTransparency = 0.2
-    hideEspBtn.Text = "×"
-    hideEspBtn.TextColor3 = Color3.fromRGB(180, 180, 188)
-    hideEspBtn.TextSize = 15
-    hideEspBtn.Font = Enum.Font.GothamBold
-    hideEspBtn.Parent = espCard
-
-    local hideCorner = Instance.new("UICorner")
-    hideCorner.CornerRadius = UDim.new(0, 7)
-    hideCorner.Parent = hideEspBtn
-
-    minEspBtn.MouseButton1Click:Connect(function()
-        espCard.Visible = false
-        hubDynamicBar.Visible = true
-    end)
-
-    hideEspBtn.MouseButton1Click:Connect(function()
-        setHubVisible(false)
-    end)
-
-    espToggleBtn.MouseButton1Click:Connect(function()
-        setHubVisible(not espCard.Visible)
-    end)
-
-    -- Thanh 3 mục: ESP | MISC | INFO
-    local tabBar = Instance.new("Frame")
-    tabBar.Size = UDim2.new(1, -32, 0, 26)
-    tabBar.Position = UDim2.new(0, 16, 0, 34)
-    tabBar.BackgroundTransparency = 1
-    tabBar.Parent = espCard
-
-    local tabLayout = Instance.new("UIListLayout")
-    tabLayout.FillDirection = Enum.FillDirection.Horizontal
-    tabLayout.Padding = UDim.new(0, 8)
-    tabLayout.Parent = tabBar
-
-    local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -32, 1, -72)
-    espPage.Position = UDim2.new(0, 16, 0, 66)
-    espPage.BackgroundTransparency = 1
-    espPage.Visible = true
-    espPage.Parent = espCard
-
-    local miscPage = Instance.new("Frame")
-    miscPage.Size = UDim2.new(1, -32, 1, -72)
-    miscPage.Position = UDim2.new(0, 16, 0, 66)
-    miscPage.BackgroundTransparency = 1
-    miscPage.Visible = false
-    miscPage.Parent = espCard
-
-    local infoPage = Instance.new("Frame")
-    infoPage.Size = UDim2.new(1, -32, 1, -72)
-    infoPage.Position = UDim2.new(0, 16, 0, 66)
-    infoPage.BackgroundTransparency = 1
-    infoPage.Visible = false
-    infoPage.Parent = espCard
-
-    local tabButtons = {}
-    local function createTabBtn(text, targetPage)
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(0.3333, -5.3, 1, 0)
-        b.BackgroundColor3 = Color3.fromRGB(26, 26, 30)
-        b.BackgroundTransparency = 0.25
-        b.Text = text
-        b.TextColor3 = Color3.fromRGB(185, 185, 195)
-        b.TextSize = 11
-        b.Font = Enum.Font.GothamBold
-        b.Parent = tabBar
-
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 7)
-        c.Parent = b
-
-        local s = Instance.new("UIStroke")
-        s.Color = Color3.fromRGB(48, 48, 54)
-        s.Thickness = 1
-        s.Parent = b
-
-        table.insert(tabButtons, { btn = b, page = targetPage, stroke = s })
-        b.MouseButton1Click:Connect(function()
-            espPage.Visible = (targetPage == espPage)
-            miscPage.Visible = (targetPage == miscPage)
-            infoPage.Visible = (targetPage == infoPage)
-            for _, item in ipairs(tabButtons) do
-                local active = (item.page == targetPage)
-                item.btn.BackgroundColor3 = active and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(26, 26, 30)
-                item.btn.BackgroundTransparency = active and 0.08 or 0.25
-                item.btn.TextColor3 = active and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
-                item.stroke.Color = active and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(48, 48, 54)
-            end
-        end)
-        return b
-    end
-
-    local espTabBtn  = createTabBtn("ESP", espPage)
-    createTabBtn("MISC", miscPage)
-    createTabBtn("INFO", infoPage)
-
-    espTabBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
-    espTabBtn.BackgroundTransparency = 0.08
-    espTabBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
-
-    local function makeToggleRow(parent, labelText, yPos, getVal, setVal)
-        local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, 0, 0, 34)
-        row.Position = UDim2.new(0, 0, 0, yPos)
-        row.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-        row.BackgroundTransparency = 0.28
-        row.BorderSizePixel = 0
-        row.Parent = parent
-
-        local rowCorner = Instance.new("UICorner")
-        rowCorner.CornerRadius = UDim.new(0, 9)
-        rowCorner.Parent = row
-
-        local rowStroke = Instance.new("UIStroke")
-        rowStroke.Color = Color3.fromRGB(48, 48, 54)
-        rowStroke.Thickness = 1
-        rowStroke.Parent = row
-
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0.66, 0, 1, 0)
-        lbl.Position = UDim2.new(0, 12, 0, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = labelText
-        lbl.TextColor3 = Color3.fromRGB(238, 238, 242)
-        lbl.TextSize = 12
-        lbl.Font = Enum.Font.GothamBold
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Parent = row
-
-        local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, 74, 0, 24)
-        btn.Position = UDim2.new(1, -84, 0.5, -12)
-        local initOn = getVal()
-        btn.BackgroundColor3 = initOn and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(36, 36, 42)
-        btn.BackgroundTransparency = initOn and 0.08 or 0.2
-        btn.Text = initOn and "BẬT" or "TẮT"
-        btn.TextColor3 = initOn and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
-        btn.TextSize = 10
-        btn.Font = Enum.Font.GothamBold
-        btn.Parent = row
-
-        local btnCorner = Instance.new("UICorner")
-        btnCorner.CornerRadius = UDim.new(0, 7)
-        btnCorner.Parent = btn
-
-        btn.MouseButton1Click:Connect(function()
-            local nextState = not getVal()
-            setVal(nextState)
-            btn.Text = nextState and "BẬT" or "TẮT"
-            btn.BackgroundColor3 = nextState and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(36, 36, 42)
-            btn.BackgroundTransparency = nextState and 0.08 or 0.2
-            btn.TextColor3 = nextState and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
-        end)
-    end
-
-    local function makeStepperRow(parent, labelText, yPos, getVal, onStep)
-        local bar = Instance.new("Frame")
-        bar.Size = UDim2.new(1, 0, 0, 32)
-        bar.Position = UDim2.new(0, 0, 0, yPos)
-        bar.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
-        bar.BackgroundTransparency = 0.28
-        bar.BorderSizePixel = 0
-        bar.Parent = parent
-
-        local barCorner = Instance.new("UICorner")
-        barCorner.CornerRadius = UDim.new(0, 8)
-        barCorner.Parent = bar
-
-        local valLabel = Instance.new("TextLabel")
-        valLabel.Size = UDim2.new(1, -84, 1, 0)
-        valLabel.Position = UDim2.new(0, 12, 0, 0)
-        valLabel.BackgroundTransparency = 1
-        valLabel.Text = labelText .. tostring(getVal())
-        valLabel.TextColor3 = Color3.fromRGB(185, 185, 195)
-        valLabel.TextSize = 11
-        valLabel.Font = Enum.Font.Code
-        valLabel.TextXAlignment = Enum.TextXAlignment.Left
-        valLabel.Parent = bar
-
-        local minusBtn = Instance.new("TextButton")
-        minusBtn.Size = UDim2.new(0, 28, 0, 22)
-        minusBtn.Position = UDim2.new(1, -66, 0.5, -11)
-        minusBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
-        minusBtn.BackgroundTransparency = 0.2
-        minusBtn.Text = "-"
-        minusBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
-        minusBtn.TextSize = 14
-        minusBtn.Font = Enum.Font.GothamBold
-        minusBtn.Parent = bar
-
-        local minusCorner = Instance.new("UICorner")
-        minusCorner.CornerRadius = UDim.new(0, 6)
-        minusCorner.Parent = minusBtn
-
-        local plusBtn = Instance.new("TextButton")
-        plusBtn.Size = UDim2.new(0, 28, 0, 22)
-        plusBtn.Position = UDim2.new(1, -34, 0.5, -11)
-        plusBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
-        plusBtn.BackgroundTransparency = 0.2
-        plusBtn.Text = "+"
-        plusBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
-        plusBtn.TextSize = 14
-        plusBtn.Font = Enum.Font.GothamBold
-        plusBtn.Parent = bar
-
-        local plusCorner = Instance.new("UICorner")
-        plusCorner.CornerRadius = UDim.new(0, 6)
-        plusCorner.Parent = plusBtn
-
-        local function refresh()
-            valLabel.Text = labelText .. tostring(getVal())
-        end
-
-        minusBtn.MouseButton1Click:Connect(function()
-            onStep(-1)
-            refresh()
-        end)
-        plusBtn.MouseButton1Click:Connect(function()
-            onStep(1)
-            refresh()
-        end)
-    end
-
-    -- --- TRANG ESP ---
-    makeToggleRow(espPage, "ESP Line (Kẻ tia)", 0,
-        function() return espState.Line end,
-        function(v) espState.Line = v end)
-
-    makeToggleRow(espPage, "ESP Box (Khung người chơi)", 40,
-        function() return espState.Box end,
-        function(v) espState.Box = v end)
-
-    makeToggleRow(espPage, "ESP FOV (Vòng tròn tâm)", 80,
-        function() return espState.Fov end,
-        function(v) espState.Fov = v end)
-
-    makeStepperRow(espPage, "FOV Size: ", 120,
-        function() return espState.FovRadius end,
-        function(dir)
-            espState.FovRadius = math.clamp(espState.FovRadius + dir * 15, 30, 350)
-        end)
-
-    -- --- TRANG MISC (BAY + CHẠY NHANH) ---
-    makeToggleRow(miscPage, "Bay (Fly)", 0,
-        function() return miscState.Fly end,
-        function(v)
-            miscState.Fly = v
-            if not v then cleanupFly() end
-        end)
-
-    makeStepperRow(miscPage, "Fly Speed: ", 40,
-        function() return miscState.FlySpeed end,
-        function(dir)
-            miscState.FlySpeed = math.clamp(miscState.FlySpeed + dir * 10, 15, 250)
-        end)
-
-    makeToggleRow(miscPage, "Chạy nhanh (Speed)", 76,
-        function() return miscState.Speed end,
-        function(v)
-            miscState.Speed = v
-            if not v then
-                local char = player.Character
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
-                if hum then hum.WalkSpeed = defaultWalkSpeed end
-            end
-        end)
-
-    makeStepperRow(miscPage, "WalkSpeed: ", 116,
-        function() return miscState.WalkSpeed end,
-        function(dir)
-            miscState.WalkSpeed = math.clamp(miscState.WalkSpeed + dir * 8, 16, 200)
-        end)
-
-    -- --- TRANG INFO (KEY CỦA BẠN + HẠN KEY) ---
-    local keyBox = Instance.new("Frame")
-    keyBox.Size = UDim2.new(1, 0, 0, 68)
-    keyBox.Position = UDim2.new(0, 0, 0, 4)
-    keyBox.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-    keyBox.BackgroundTransparency = 0.28
-    keyBox.BorderSizePixel = 0
-    keyBox.Parent = infoPage
-
-    local keyBoxCorner = Instance.new("UICorner")
-    keyBoxCorner.CornerRadius = UDim.new(0, 9)
-    keyBoxCorner.Parent = keyBox
-
-    local keyBoxStroke = Instance.new("UIStroke")
-    keyBoxStroke.Color = Color3.fromRGB(48, 48, 54)
-    keyBoxStroke.Thickness = 1
-    keyBoxStroke.Parent = keyBox
-
-    local keyTitleLbl = Instance.new("TextLabel")
-    keyTitleLbl.Size = UDim2.new(1, -90, 0, 18)
-    keyTitleLbl.Position = UDim2.new(0, 12, 0, 8)
-    keyTitleLbl.BackgroundTransparency = 1
-    keyTitleLbl.Text = "KEY CỦA BẠN"
-    keyTitleLbl.TextColor3 = Color3.fromRGB(36, 185, 255)
-    keyTitleLbl.TextSize = 10
-    keyTitleLbl.Font = Enum.Font.GothamBold
-    keyTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-    keyTitleLbl.Parent = keyBox
-
-    local keyValLbl = Instance.new("TextLabel")
-    keyValLbl.Size = UDim2.new(1, -92, 0, 28)
-    keyValLbl.Position = UDim2.new(0, 12, 0, 28)
-    keyValLbl.BackgroundTransparency = 1
-    keyValLbl.Text = (keyInfoState.Key ~= "" and keyInfoState.Key) or "Chưa có key"
-    keyValLbl.TextColor3 = Color3.fromRGB(242, 242, 246)
-    keyValLbl.TextSize = 11
-    keyValLbl.Font = Enum.Font.Code
-    keyValLbl.TextXAlignment = Enum.TextXAlignment.Left
-    keyValLbl.TextTruncate = Enum.TextTruncate.AtEnd
-    keyValLbl.Parent = keyBox
-
-    local copyMyKeyBtn = Instance.new("TextButton")
-    copyMyKeyBtn.Size = UDim2.new(0, 66, 0, 26)
-    copyMyKeyBtn.Position = UDim2.new(1, -76, 0.5, -13)
-    copyMyKeyBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
-    copyMyKeyBtn.BackgroundTransparency = 0.08
-    copyMyKeyBtn.Text = "COPY"
-    copyMyKeyBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
-    copyMyKeyBtn.TextSize = 10
-    copyMyKeyBtn.Font = Enum.Font.GothamBold
-    copyMyKeyBtn.Parent = keyBox
-
-    local copyMyKeyCorner = Instance.new("UICorner")
-    copyMyKeyCorner.CornerRadius = UDim.new(0, 7)
-    copyMyKeyCorner.Parent = copyMyKeyBtn
-
-    copyMyKeyBtn.MouseButton1Click:Connect(function()
-        if keyInfoState.Key ~= "" then
-            copyText(keyInfoState.Key)
-            copyMyKeyBtn.Text = "ĐÃ COPY"
-            task.delay(1.2, function()
-                if copyMyKeyBtn and copyMyKeyBtn.Parent then
-                    copyMyKeyBtn.Text = "COPY"
-                end
-            end)
-        end
-    end)
-
-    local expBox = Instance.new("Frame")
-    expBox.Size = UDim2.new(1, 0, 0, 66)
-    expBox.Position = UDim2.new(0, 0, 0, 82)
-    expBox.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-    expBox.BackgroundTransparency = 0.28
-    expBox.BorderSizePixel = 0
-    expBox.Parent = infoPage
-
-    local expBoxCorner = Instance.new("UICorner")
-    expBoxCorner.CornerRadius = UDim.new(0, 9)
-    expBoxCorner.Parent = expBox
-
-    local expBoxStroke = Instance.new("UIStroke")
-    expBoxStroke.Color = Color3.fromRGB(48, 48, 54)
-    expBoxStroke.Thickness = 1
-    expBoxStroke.Parent = expBox
-
-    local expTitleLbl = Instance.new("TextLabel")
-    expTitleLbl.Size = UDim2.new(1, -24, 0, 18)
-    expTitleLbl.Position = UDim2.new(0, 12, 0, 8)
-    expTitleLbl.BackgroundTransparency = 1
-    expTitleLbl.Text = "THỜI GIAN HẾT HẠN KEY"
-    expTitleLbl.TextColor3 = Color3.fromRGB(36, 185, 255)
-    expTitleLbl.TextSize = 10
-    expTitleLbl.Font = Enum.Font.GothamBold
-    expTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-    expTitleLbl.Parent = expBox
-
-    local expValLbl = Instance.new("TextLabel")
-    expValLbl.Size = UDim2.new(1, -24, 0, 28)
-    expValLbl.Position = UDim2.new(0, 12, 0, 28)
-    expValLbl.BackgroundTransparency = 1
-    expValLbl.Text = tostring(keyInfoState.Expires)
-    expValLbl.TextColor3 = Color3.fromRGB(242, 242, 246)
-    expValLbl.TextSize = 11
-    expValLbl.Font = Enum.Font.Code
-    expValLbl.TextXAlignment = Enum.TextXAlignment.Left
-    expValLbl.TextTruncate = Enum.TextTruncate.AtEnd
-    expValLbl.Parent = expBox
-
-    applyTransparentMenuStyle(espCard, 15)
-end
-
--- ==========================================
--- KEY UI BUILDER
--- ==========================================
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AndzKeyMenu"
-screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-screenGui.Parent = parentGui
-
-local toastFrame = Instance.new("Frame")
-toastFrame.Name = "Toast"
-toastFrame.Size = UDim2.new(0, 320, 0, 34)
-toastFrame.Position = UDim2.new(0.5, -160, 1, -48)
-toastFrame.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
-toastFrame.BackgroundTransparency = 0.2
-toastFrame.BorderSizePixel = 0
-toastFrame.Visible = false
-toastFrame.Parent = screenGui
-
-local toastCorner = Instance.new("UICorner")
-toastCorner.CornerRadius = UDim.new(0, 9)
-toastCorner.Parent = toastFrame
-
-local toastLabel = Instance.new("TextLabel")
-toastLabel.Size = UDim2.new(1, -18, 1, 0)
-toastLabel.Position = UDim2.new(0, 9, 0, 0)
-toastLabel.BackgroundTransparency = 1
-toastLabel.Text = ""
-toastLabel.TextColor3 = Color3.fromRGB(238, 238, 242)
-toastLabel.TextSize = 11
-toastLabel.Font = Enum.Font.GothamMedium
-toastLabel.TextXAlignment = Enum.TextXAlignment.Left
-toastLabel.TextTruncate = Enum.TextTruncate.AtEnd
-toastLabel.Parent = toastFrame
-
-local function showToast(msg)
-    toastLabel.Text = tostring(msg)
-    toastFrame.Visible = true
-    task.spawn(function()
-        task.wait(2.2)
-        if toastFrame and toastFrame.Parent then
-            toastFrame.Visible = false
-        end
-    end)
-end
-
-local toggleBtn = Instance.new("ImageButton")
-toggleBtn.Name = "ToggleMenuBtn"
-toggleBtn.Size = UDim2.new(0, 56, 0, 56)
-toggleBtn.Position = UDim2.new(0, 14, 0.5, -28)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
-toggleBtn.BorderSizePixel = 0
-toggleBtn.Image = resolvedLogo
-toggleBtn.ScaleType = Enum.ScaleType.Crop
-toggleBtn.Active = true
-toggleBtn.Draggable = true
-toggleBtn.Parent = screenGui
-
-local toggleCorner = Instance.new("UICorner")
-toggleCorner.CornerRadius = UDim.new(1, 0)
-toggleCorner.Parent = toggleBtn
-
-local toggleStroke = Instance.new("UIStroke")
-toggleStroke.Color = Color3.fromRGB(36, 175, 255)
-toggleStroke.Thickness = 2
-toggleStroke.Parent = toggleBtn
-
-buildAndzBadge(toggleBtn, true)
-
-local mainCard = Instance.new("Frame")
-mainCard.Name = "MainCard"
-mainCard.Size = UDim2.new(0, 460, 0, 214)
-mainCard.Position = UDim2.new(0.5, -230, 0.5, -107)
-mainCard.BackgroundColor3 = Color3.fromRGB(16, 16, 18)
-mainCard.BorderSizePixel = 0
-mainCard.Active = true
-mainCard.Draggable = true
-mainCard.Visible = true
-mainCard.Parent = screenGui
-
-local cardCorner = Instance.new("UICorner")
-cardCorner.CornerRadius = UDim.new(0, 15)
-cardCorner.Parent = mainCard
-
-local cardStroke = Instance.new("UIStroke")
-cardStroke.Color = Color3.fromRGB(42, 42, 48)
-cardStroke.Thickness = 1
-cardStroke.Parent = mainCard
-
-local keyDynamicBar = createDynamicTopBar(screenGui, "ANDZ KEY", function()
-    mainCard.Visible = true
-    toggleStroke.Color = Color3.fromRGB(240, 240, 245)
-end)
-
-local function setMenuVisible(state)
-    mainCard.Visible = state
-    if state then
-        keyDynamicBar.Visible = false
-    end
-    toggleStroke.Color = state and Color3.fromRGB(240, 240, 245) or Color3.fromRGB(36, 175, 255)
-end
-
-local minBtn = Instance.new("TextButton")
-minBtn.Size = UDim2.new(0, 24, 0, 24)
-minBtn.Position = UDim2.new(1, -62, 0, 12)
-minBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-minBtn.BackgroundTransparency = 0.2
-minBtn.Text = "-"
-minBtn.TextColor3 = Color3.fromRGB(36, 185, 255)
-minBtn.TextSize = 15
-minBtn.Font = Enum.Font.GothamBold
-minBtn.Parent = mainCard
-
-local minCorner = Instance.new("UICorner")
-minCorner.CornerRadius = UDim.new(0, 7)
-minCorner.Parent = minBtn
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 24, 0, 24)
-closeBtn.Position = UDim2.new(1, -34, 0, 12)
-closeBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-closeBtn.BackgroundTransparency = 0.2
-closeBtn.Text = "×"
-closeBtn.TextColor3 = Color3.fromRGB(170, 170, 178)
-closeBtn.TextSize = 15
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.Parent = mainCard
-
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 7)
-closeCorner.Parent = closeBtn
-
-minBtn.MouseButton1Click:Connect(function()
-    mainCard.Visible = false
-    keyDynamicBar.Visible = true
-end)
-
-closeBtn.MouseButton1Click:Connect(function()
-    setMenuVisible(false)
-end)
-
-toggleBtn.MouseButton1Click:Connect(function()
-    setMenuVisible(not mainCard.Visible)
-end)
-
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(0, 195, 0, 22)
-titleLabel.Position = UDim2.new(0, 18, 0, 12)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Đăng nhập bằng key"
-titleLabel.TextColor3 = Color3.fromRGB(245, 245, 248)
-titleLabel.TextSize = 17
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-titleLabel.Parent = mainCard
-
-local subLabel = Instance.new("TextLabel")
-subLabel.Size = UDim2.new(0, 195, 0, 14)
-subLabel.Position = UDim2.new(0, 18, 0, 34)
-subLabel.BackgroundTransparency = 1
-subLabel.Text = "ANDZ LICENSE VERIFICATION"
-subLabel.TextColor3 = Color3.fromRGB(120, 120, 128)
-subLabel.TextSize = 9
-subLabel.Font = Enum.Font.GothamMedium
-subLabel.TextXAlignment = Enum.TextXAlignment.Left
-subLabel.Parent = mainCard
-
-local headerLogo = Instance.new("ImageLabel")
-headerLogo.Name = "HeaderLogo"
-headerLogo.Size = UDim2.new(0, 40, 0, 40)
-headerLogo.Position = UDim2.new(0, 214, 0, 11)
-headerLogo.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
-headerLogo.BorderSizePixel = 0
-headerLogo.Image = resolvedLogo
-headerLogo.ScaleType = Enum.ScaleType.Crop
-headerLogo.Parent = mainCard
-
-local headerLogoCorner = Instance.new("UICorner")
-headerLogoCorner.CornerRadius = UDim.new(0, 10)
-headerLogoCorner.Parent = headerLogo
-
-local headerLogoStroke = Instance.new("UIStroke")
-headerLogoStroke.Color = Color3.fromRGB(36, 175, 255)
-headerLogoStroke.Thickness = 1.6
-headerLogoStroke.Parent = headerLogo
-
-buildAndzBadge(headerLogo, false)
-
-local keyTitle = Instance.new("TextLabel")
-keyTitle.Size = UDim2.new(1, -36, 0, 14)
-keyTitle.Position = UDim2.new(0, 18, 0, 56)
-keyTitle.BackgroundTransparency = 1
-keyTitle.Text = "KEY KÍCH HOẠT"
-keyTitle.TextColor3 = Color3.fromRGB(155, 155, 163)
-keyTitle.TextSize = 10
-keyTitle.Font = Enum.Font.GothamBold
-keyTitle.TextXAlignment = Enum.TextXAlignment.Left
-keyTitle.Parent = mainCard
-
-local inputBoxFrame = Instance.new("Frame")
-inputBoxFrame.Size = UDim2.new(1, -150, 0, 38)
-inputBoxFrame.Position = UDim2.new(0, 18, 0, 74)
-inputBoxFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-inputBoxFrame.BackgroundTransparency = 0.28
-inputBoxFrame.BorderSizePixel = 0
-inputBoxFrame.Parent = mainCard
-
-local inputCorner = Instance.new("UICorner")
-inputCorner.CornerRadius = UDim.new(0, 9)
-inputCorner.Parent = inputBoxFrame
-
-local inputStroke = Instance.new("UIStroke")
-inputStroke.Color = Color3.fromRGB(52, 52, 58)
-inputStroke.Thickness = 1
-inputStroke.Parent = inputBoxFrame
-
-local keyInput = Instance.new("TextBox")
-keyInput.Size = UDim2.new(1, -30, 1, 0)
-keyInput.Position = UDim2.new(0, 11, 0, 0)
-keyInput.BackgroundTransparency = 1
-keyInput.PlaceholderText = "Nhập key kích hoạt..."
-keyInput.PlaceholderColor3 = Color3.fromRGB(115, 115, 122)
-keyInput.Text = ""
-keyInput.TextColor3 = Color3.fromRGB(240, 240, 245)
-keyInput.TextSize = 12
-keyInput.Font = Enum.Font.Code
-keyInput.TextXAlignment = Enum.TextXAlignment.Left
-keyInput.ClearTextOnFocus = false
-keyInput.Parent = inputBoxFrame
-
-local dotIndicator = Instance.new("Frame")
-dotIndicator.Size = UDim2.new(0, 7, 0, 7)
-dotIndicator.Position = UDim2.new(1, -16, 0.5, -3.5)
-dotIndicator.BackgroundColor3 = Color3.fromRGB(210, 210, 215)
-dotIndicator.BorderSizePixel = 0
-dotIndicator.Parent = inputBoxFrame
-
-local dotCorner = Instance.new("UICorner")
-dotCorner.CornerRadius = UDim.new(1, 0)
-dotCorner.Parent = dotIndicator
-
-local loginBtn = Instance.new("TextButton")
-loginBtn.Size = UDim2.new(0, 118, 0, 38)
-loginBtn.Position = UDim2.new(1, -136, 0, 74)
-loginBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
-loginBtn.BackgroundTransparency = 0.08
-loginBtn.Text = "ĐĂNG NHẬP"
-loginBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
-loginBtn.TextSize = 11
-loginBtn.Font = Enum.Font.GothamBold
-loginBtn.Parent = mainCard
-
-local loginCorner = Instance.new("UICorner")
-loginCorner.CornerRadius = UDim.new(0, 9)
-loginCorner.Parent = loginBtn
-
-local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -36, 0, 18)
-statusLabel.Position = UDim2.new(0, 18, 0, 118)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Sẵn sàng xác thực key."
-statusLabel.TextColor3 = Color3.fromRGB(160, 160, 168)
-statusLabel.TextSize = 11
-statusLabel.Font = Enum.Font.Gotham
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
-statusLabel.Parent = mainCard
-
-local btnRow = Instance.new("Frame")
-btnRow.Size = UDim2.new(1, -36, 0, 36)
-btnRow.Position = UDim2.new(0, 18, 0, 160)
-btnRow.BackgroundTransparency = 1
-btnRow.Parent = mainCard
-
-local rowLayout = Instance.new("UIListLayout")
-rowLayout.FillDirection = Enum.FillDirection.Horizontal
-rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-rowLayout.Padding = UDim.new(0, 10)
-rowLayout.Parent = btnRow
-
-local function createActionBtn(text, isPrimary)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0.3333, -7, 1, 0)
-    b.BackgroundColor3 = isPrimary and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(24, 24, 28)
-    b.BackgroundTransparency = isPrimary and 0.08 or 0.25
-    b.Text = text
-    b.TextColor3 = isPrimary and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(235, 235, 240)
-    b.TextSize = 11
-    b.Font = Enum.Font.GothamBold
-    b.Parent = btnRow
-
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 9)
-    c.Parent = b
-
-    if not isPrimary then
-        local s = Instance.new("UIStroke")
-        s.Color = Color3.fromRGB(52, 52, 58)
-        s.Thickness = 1
-        s.Parent = b
-    end
-    return b
-end
-
-local getKeyBtn   = createActionBtn("GET KEY", true)
-local pasteKeyBtn = createActionBtn("DÁN KEY", false)
-local saveKeyBtn  = createActionBtn("LƯU KEY", false)
-
-applyTransparentMenuStyle(mainCard, 15)
-
-local saved = loadKeyFromFile()
-if saved and saved ~= "" then
-    keyInput.Text = saved:gsub("%s+", "")
-    statusLabel.Text = "Đã tự động tải key đã lưu."
-end
-
-getKeyBtn.MouseButton1Click:Connect(function()
-    local copied = copyText(GET_KEY_URL)
-    if copied then
-        statusLabel.Text = "Đã copy link lấy key: " .. GET_KEY_URL
-        showToast("ANDZ đã sao chép link vượt key vào bộ nhớ tạm")
-    else
-        keyInput.Text = GET_KEY_URL
-        statusLabel.Text = "Hãy copy link từ ô nhập: " .. GET_KEY_URL
-        showToast("Đã điền link lấy key vào ô nhập")
-    end
-end)
-
-pasteKeyBtn.MouseButton1Click:Connect(function()
-    local clip = pasteText()
-    if clip and tostring(clip) ~= "" then
-        local cleaned = tostring(clip):gsub("^%s+", ""):gsub("%s+$", "")
-        keyInput.Text = cleaned
-        statusLabel.Text = "Đã dán key thành công."
-        showToast("ANDZ đã dán dữ liệu từ bảng nhớ tạm của bạn")
-    else
-        statusLabel.Text = "Không đọc được bảng nhớ tạm hoặc đang trống."
-        showToast("Không thể dán tự động, hãy dán thủ công vào ô nhập")
-    end
-end)
-
-saveKeyBtn.MouseButton1Click:Connect(function()
-    local k = keyInput.Text:gsub("%s+", "")
-    if k == "" then
-        statusLabel.Text = "Vui lòng nhập key trước khi lưu."
-        showToast("Chưa có key để lưu")
-        return
-    end
-    saveKeyToFile(k)
-    statusLabel.Text = "Đã lưu key thành công."
-    showToast("ANDZ đã lưu key của bạn")
-end)
-
-local checking = false
-loginBtn.MouseButton1Click:Connect(function()
-    if checking then return end
-    local k = keyInput.Text:gsub("%s+", "")
-    if k == "" then
-        statusLabel.Text = "Vui lòng nhập key kích hoạt."
-        showToast("Key không được để trống")
-        return
-    end
-
-    checking = true
-    loginBtn.Text = "ĐANG KIỂM TRA..."
-    statusLabel.Text = "Đang kết nối tới máy chủ xác thực..."
-
-    task.spawn(function()
-        local hwid = getHWID()
-        local sep = API_URL:find("?", 1, true) and "&" or "?"
-        local fullUrl = API_URL .. sep .. "key=" .. urlEncode(k) .. "&hwid=" .. urlEncode(hwid)
-
-        local ok, body = httpRequestGet(fullUrl)
-        checking = false
-        loginBtn.Text = "ĐĂNG NHẬP"
-
-        if not ok then
-            statusLabel.Text = body
-            showToast("Lỗi kết nối API")
-            return
-        end
-
-        local lowerBody = body:lower()
-        local isValid = lowerBody:find('"valid"%s*:%s*true')
-            or lowerBody:find('"status"%s*:%s*"success"')
-            or lowerBody:find('"success"%s*:%s*true')
-            or (body:gsub("%s+", ""):lower() == "valid")
-            or (body:gsub("%s+", ""):lower() == "success")
-
-        if isValid then
-            keyInfoState.Key = k
-            keyInfoState.Expires = extractExpiryFromBody(body)
-            saveKeyToFile(k)
-            statusLabel.Text = "Xác thực thành công! Đang mở menu..."
-            showToast("Đăng nhập thành công")
-            task.wait(0.6)
-            screenGui:Destroy()
-            openMainHub()
-        else
-            local msg = body:match('"message"%s*:%s*"([^"]+)"')
-                or body:match('"msg"%s*:%s*"([^"]+)"')
-                or "Key không hợp lệ hoặc đã hết hạn."
-            statusLabel.Text = msg
-            showToast(msg)
-        end
-    end)
-end)
