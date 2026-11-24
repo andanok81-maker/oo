@@ -1,0 +1,1390 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local VirtualUser = game:GetService("VirtualUser")
+local CoreGui = game:GetService("CoreGui")
+
+repeat task.wait() until game:IsLoaded() and Players.LocalPlayer
+
+local plr = Players.LocalPlayer
+
+-- ==========================================
+-- ANDZ HUB CONFIG
+-- ==========================================
+local ANDZ_API_URL          = "https://andzvclra.andanok81.workers.dev/api.php"
+local ANDZ_GET_KEY_URL      = "https://andzvclra.andanok81.workers.dev/vuotlink"
+local ANDZ_SAVE_FILE        = "AndzProxy_Key.txt"
+local ANDZ_BG_SAVE_FILE     = "AndzProxy_Bg.txt"
+local ANDZ_IMG_1            = "rbxassetid://79283889919078"
+local ANDZ_IMG_2            = "rbxassetid://126488474446741"
+local ANDZ_LOAD_AFTER_VALID = ""
+
+local function addToGui(gui)
+	local ok = pcall(function()
+		gui.Parent = CoreGui
+	end)
+	if not ok then
+		gui.Parent = plr:WaitForChild("PlayerGui")
+	end
+end
+
+local function normalizeAssetId(raw)
+	local s = tostring(raw or ""):gsub("%s+", "")
+	if s == "" then return nil end
+	if s:match("^rbxassetid://%d+$") then
+		return s
+	end
+	local digits = s:match("(%d+)")
+	if digits then
+		return "rbxassetid://" .. digits
+	end
+	return nil
+end
+
+local function saveBgFile(assetStr)
+	pcall(function()
+		if writefile then
+			writefile(ANDZ_BG_SAVE_FILE, tostring(assetStr))
+		end
+	end)
+end
+
+local function loadSavedBgFile()
+	local found = nil
+	pcall(function()
+		if isfile and readfile and isfile(ANDZ_BG_SAVE_FILE) then
+			local raw = tostring(readfile(ANDZ_BG_SAVE_FILE) or "")
+			local norm = normalizeAssetId(raw)
+			if norm then
+				found = norm
+			end
+		end
+	end)
+	return found or ANDZ_IMG_1
+end
+
+local currentBgAsset = loadSavedBgFile()
+
+local function getHWID()
+	local hwid = tostring(plr.UserId)
+	pcall(function()
+		if gethwid then
+			hwid = tostring(gethwid())
+		elseif getexecutorhwid then
+			hwid = tostring(getexecutorhwid())
+		else
+			local analytics = game:GetService("RbxAnalyticsService")
+			if analytics and analytics.GetClientId then
+				hwid = tostring(analytics:GetClientId())
+			end
+		end
+	end)
+	return hwid
+end
+
+local function urlEncode(str)
+	str = tostring(str or "")
+	str = str:gsub("\n", "\r\n")
+	str = str:gsub("([^%w%-_%.~ ])", function(c)
+		return string.format("%%%02X", string.byte(c))
+	end)
+	str = str:gsub(" ", "+")
+	return str
+end
+
+local function httpGetBody(url)
+	local lastErr = "Không thể kết nối tới máy chủ."
+	local reqList = {
+		request,
+		http_request,
+		(syn and syn.request),
+		(http and http.request),
+		(fluxus and fluxus.request),
+		(krnl and krnl.request)
+	}
+
+	for _, reqFn in ipairs(reqList) do
+		if type(reqFn) == "function" then
+			local ok, res = pcall(function()
+				return reqFn({
+					Url = url,
+					Method = "GET",
+					Headers = {
+						["User-Agent"] = "Mozilla/5.0"
+					}
+				})
+			end)
+			if ok and type(res) == "table" then
+				local body = res.Body or res.body
+				if body and tostring(body) ~= "" then
+					return true, tostring(body)
+				end
+				lastErr = "HTTP " .. tostring(res.StatusCode or res.status or "?")
+			elseif not ok then
+				lastErr = tostring(res)
+			end
+		end
+	end
+
+	local okGet, resGet = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if okGet and resGet and tostring(resGet) ~= "" then
+		return true, tostring(resGet)
+	elseif not okGet then
+		lastErr = tostring(resGet)
+	end
+
+	return false, lastErr
+end
+
+local function verifyKeyApi(key)
+	local hwid = getHWID()
+	local sep = ANDZ_API_URL:find("?", 1, true) and "&" or "?"
+	local url = ANDZ_API_URL .. sep .. "key=" .. urlEncode(key) .. "&hwid=" .. urlEncode(hwid)
+
+	local ok, body = httpGetBody(url)
+	if not ok then
+		return false, "Lỗi kết nối: " .. tostring(body)
+	end
+
+	local lower = body:lower()
+	local valid = lower:find('"valid"%s*:%s*true')
+		or lower:find('"status"%s*:%s*"success"')
+		or lower:find('"success"%s*:%s*true')
+		or (body:gsub("%s+", ""):lower() == "valid")
+		or (body:gsub("%s+", ""):lower() == "success")
+
+	local msg = body:match('"message"%s*:%s*"([^"]+)"')
+		or body:match('"msg"%s*:%s*"([^"]+)"')
+		or (valid and "Xác thực key thành công!" or "Key không hợp lệ hoặc đã hết hạn.")
+
+	return valid, msg
+end
+
+local function saveKeyFile(key)
+	pcall(function()
+		if writefile then
+			writefile(ANDZ_SAVE_FILE, tostring(key))
+		end
+	end)
+end
+
+local function loadSavedKeyFile()
+	local found = nil
+	pcall(function()
+		if isfile and readfile and isfile(ANDZ_SAVE_FILE) then
+			local raw = tostring(readfile(ANDZ_SAVE_FILE) or "")
+			raw = raw:gsub("%s+", "")
+			if raw ~= "" then
+				found = raw
+			end
+		end
+	end)
+	return found
+end
+
+local function clearSavedKeyFile()
+	pcall(function()
+		if isfile and delfile and isfile(ANDZ_SAVE_FILE) then
+			delfile(ANDZ_SAVE_FILE)
+		end
+	end)
+end
+
+local function makeDraggable(frame, dragHandle)
+	dragHandle = dragHandle or frame
+	local dragging = false
+	local dragInput, dragStart, startPos
+
+	dragHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	dragHandle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+-- Dọn UI cũ nếu chạy lại
+pcall(function()
+	for _, name in ipairs({ "AndzProxyGui", "AndzMainHubGui", "AndzDynamicIslandGui" }) do
+		local old = CoreGui:FindFirstChild(name)
+		if old then old:Destroy() end
+	end
+end)
+
+-- ==========================================
+-- DYNAMIC ISLAND NÂNG CẤP (PILL + EXPANDED)
+-- ==========================================
+local islandGui = Instance.new("ScreenGui")
+islandGui.Name = "AndzDynamicIslandGui"
+islandGui.IgnoreGuiInset = true
+islandGui.ResetOnSpawn = false
+islandGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+addToGui(islandGui)
+
+local islandFrame = Instance.new("Frame")
+islandFrame.Name = "IslandFrame"
+islandFrame.Size = UDim2.new(0, 230, 0, 36)
+islandFrame.Position = UDim2.new(0.5, 0, 0, 12)
+islandFrame.AnchorPoint = Vector2.new(0.5, 0)
+islandFrame.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
+islandFrame.BackgroundTransparency = 0.06
+islandFrame.BorderSizePixel = 0
+islandFrame.ClipsDescendants = true
+islandFrame.ZIndex = 60
+islandFrame.Parent = islandGui
+
+local islandCorner = Instance.new("UICorner")
+islandCorner.CornerRadius = UDim.new(0, 18)
+islandCorner.Parent = islandFrame
+
+local islandStroke = Instance.new("UIStroke")
+islandStroke.Color = Color3.fromRGB(65, 175, 255)
+islandStroke.Transparency = 0.35
+islandStroke.Thickness = 1.4
+islandStroke.Parent = islandFrame
+
+local islandIcon = Instance.new("ImageLabel")
+islandIcon.Name = "IslandIcon"
+islandIcon.Size = UDim2.new(0, 24, 0, 24)
+islandIcon.Position = UDim2.new(0, 6, 0, 6)
+islandIcon.BackgroundColor3 = Color3.fromRGB(22, 27, 38)
+islandIcon.BorderSizePixel = 0
+islandIcon.Image = currentBgAsset
+islandIcon.ScaleType = Enum.ScaleType.Crop
+islandIcon.ZIndex = 62
+islandIcon.Parent = islandFrame
+
+local islandIconCorner = Instance.new("UICorner")
+islandIconCorner.CornerRadius = UDim.new(1, 0)
+islandIconCorner.Parent = islandIcon
+
+local islandTitle = Instance.new("TextLabel")
+islandTitle.Name = "IslandTitle"
+islandTitle.Size = UDim2.new(0, 82, 0, 24)
+islandTitle.Position = UDim2.new(0, 36, 0, 6)
+islandTitle.BackgroundTransparency = 1
+islandTitle.Font = Enum.Font.GothamBold
+islandTitle.Text = "ANDZ HUB"
+islandTitle.TextColor3 = Color3.fromRGB(245, 248, 255)
+islandTitle.TextSize = 11.5
+islandTitle.TextXAlignment = Enum.TextXAlignment.Left
+islandTitle.ZIndex = 62
+islandTitle.Parent = islandFrame
+
+local islandBadge = Instance.new("TextLabel")
+islandBadge.Name = "IslandBadge"
+islandBadge.Size = UDim2.new(1, -124, 0, 24)
+islandBadge.Position = UDim2.new(0, 118, 0, 6)
+islandBadge.BackgroundTransparency = 1
+islandBadge.Font = Enum.Font.GothamMedium
+islandBadge.Text = "READY"
+islandBadge.TextColor3 = Color3.fromRGB(115, 220, 255)
+islandBadge.TextSize = 10.5
+islandBadge.TextXAlignment = Enum.TextXAlignment.Right
+islandBadge.TextTruncate = Enum.TextTruncate.AtEnd
+islandBadge.ZIndex = 62
+islandBadge.Parent = islandFrame
+
+local islandExpandBtn = Instance.new("TextButton")
+islandExpandBtn.Name = "IslandExpandBtn"
+islandExpandBtn.Size = UDim2.new(1, 0, 0, 36)
+islandExpandBtn.Position = UDim2.new(0, 0, 0, 0)
+islandExpandBtn.BackgroundTransparency = 1
+islandExpandBtn.Text = ""
+islandExpandBtn.ZIndex = 63
+islandExpandBtn.Parent = islandFrame
+
+-- Khu vực mở rộng của Dynamic Island
+local islandDetail = Instance.new("TextLabel")
+islandDetail.Name = "IslandDetail"
+islandDetail.Size = UDim2.new(1, -24, 0, 20)
+islandDetail.Position = UDim2.new(0, 12, 0, 40)
+islandDetail.BackgroundTransparency = 1
+islandDetail.Font = Enum.Font.GothamMedium
+islandDetail.Text = "Dynamic Island • Đang hoạt động"
+islandDetail.TextColor3 = Color3.fromRGB(190, 202, 220)
+islandDetail.TextSize = 11
+islandDetail.TextXAlignment = Enum.TextXAlignment.Left
+islandDetail.TextTruncate = Enum.TextTruncate.AtEnd
+islandDetail.ZIndex = 62
+islandDetail.Parent = islandFrame
+
+local islandActions = Instance.new("Frame")
+islandActions.Name = "IslandActions"
+islandActions.Size = UDim2.new(1, -24, 0, 28)
+islandActions.Position = UDim2.new(0, 12, 0, 64)
+islandActions.BackgroundTransparency = 1
+islandActions.ZIndex = 62
+islandActions.Parent = islandFrame
+
+local function makeIslandBtn(text, xScale, xOffset, widthScale, widthOffset)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(widthScale, widthOffset, 1, 0)
+	b.Position = UDim2.new(xScale, xOffset, 0, 0)
+	b.BackgroundColor3 = Color3.fromRGB(30, 36, 48)
+	b.BorderSizePixel = 0
+	b.Font = Enum.Font.GothamBold
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(240, 245, 252)
+	b.TextSize = 10.5
+	b.ZIndex = 64
+	b.Parent = islandActions
+
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 7)
+	c.Parent = b
+	return b
+end
+
+local diToggleMenuBtn = makeIslandBtn("MENU", 0, 0, 0.31, -3)
+local diBg1Btn        = makeIslandBtn("ẢNH 1", 0.33, 2, 0.31, -3)
+local diBg2Btn        = makeIslandBtn("ẢNH 2", 0.66, 4, 0.34, -4)
+
+local isIslandExpanded = false
+local setIslandExpanded
+local toggleActiveWindow
+
+local function pulseIsland(badgeText, detailText, accentColor)
+	islandBadge.Text = tostring(badgeText or "INFO")
+	if detailText then
+		islandDetail.Text = tostring(detailText)
+	end
+	if accentColor then
+		islandBadge.TextColor3 = accentColor
+		islandStroke.Color = accentColor
+	end
+
+	local targetW = isIslandExpanded and 340 or 248
+	local targetH = isIslandExpanded and 102 or 36
+	local bumpW = targetW + 14
+	local bumpH = targetH + 3
+
+	local tBump = TweenService:Create(islandFrame, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, bumpW, 0, bumpH)
+	})
+	local tSettle = TweenService:Create(islandFrame, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, targetW, 0, targetH)
+	})
+	tBump:Play()
+	tBump.Completed:Connect(function()
+		tSettle:Play()
+	end)
+end
+
+setIslandExpanded = function(exp)
+	isIslandExpanded = exp
+	local w = isIslandExpanded and 340 or 230
+	local h = isIslandExpanded and 102 or 36
+	local r = isIslandExpanded and 22 or 18
+	islandCorner.CornerRadius = UDim.new(0, r)
+	TweenService:Create(islandFrame, TweenInfo.new(0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, w, 0, h)
+	}):Play()
+end
+
+islandExpandBtn.MouseButton1Click:Connect(function()
+	setIslandExpanded(not isIslandExpanded)
+end)
+
+-- ==========================================
+-- MENU CHÍNH ANDZ HUB (SAU KHI PASS KEY)
+-- ==========================================
+local openMainHub
+local applyGlobalThemeAsset
+
+do
+	local hubGui = Instance.new("ScreenGui")
+	hubGui.Name = "AndzMainHubGui"
+	hubGui.IgnoreGuiInset = true
+	hubGui.ResetOnSpawn = false
+	hubGui.Enabled = false
+	hubGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	addToGui(hubGui)
+
+	local hubFloatBtn = Instance.new("ImageButton")
+	hubFloatBtn.Name = "HubFloatBtn"
+	hubFloatBtn.Size = UDim2.new(0, 72, 0, 72)
+	hubFloatBtn.Position = UDim2.new(0, 56, 0.5, 0)
+	hubFloatBtn.AnchorPoint = Vector2.new(0, 0.5)
+	hubFloatBtn.BackgroundColor3 = Color3.fromRGB(16, 20, 28)
+	hubFloatBtn.BorderSizePixel = 0
+	hubFloatBtn.Image = currentBgAsset
+	hubFloatBtn.ScaleType = Enum.ScaleType.Crop
+	hubFloatBtn.ZIndex = 30
+	hubFloatBtn.Parent = hubGui
+
+	local hubFloatCorner = Instance.new("UICorner")
+	hubFloatCorner.CornerRadius = UDim.new(1, 0)
+	hubFloatCorner.Parent = hubFloatBtn
+
+	local hubFloatStroke = Instance.new("UIStroke")
+	hubFloatStroke.Color = Color3.fromRGB(50, 175, 255)
+	hubFloatStroke.Thickness = 2.2
+	hubFloatStroke.Parent = hubFloatBtn
+
+	local hubWindow = Instance.new("Frame")
+	hubWindow.Name = "HubWindow"
+	hubWindow.Size = UDim2.new(0, 560, 0, 330)
+	hubWindow.Position = UDim2.new(0.5, 0, 0.5, 0)
+	hubWindow.AnchorPoint = Vector2.new(0.5, 0.5)
+	hubWindow.BackgroundColor3 = Color3.fromRGB(20, 24, 32)
+	hubWindow.BorderSizePixel = 0
+	hubWindow.ClipsDescendants = true
+	hubWindow.ZIndex = 10
+	hubWindow.Parent = hubGui
+
+	local hubCorner = Instance.new("UICorner")
+	hubCorner.CornerRadius = UDim.new(0, 14)
+	hubCorner.Parent = hubWindow
+
+	local hubStroke = Instance.new("UIStroke")
+	hubStroke.Color = Color3.fromRGB(255, 255, 255)
+	hubStroke.Transparency = 0.85
+	hubStroke.Thickness = 1
+	hubStroke.Parent = hubWindow
+
+	local hubBgImage = Instance.new("ImageLabel")
+	hubBgImage.Name = "HubBgImage"
+	hubBgImage.Size = UDim2.new(1, 0, 1, 0)
+	hubBgImage.Position = UDim2.new(0, 0, 0, 0)
+	hubBgImage.BackgroundTransparency = 1
+	hubBgImage.Image = currentBgAsset
+	hubBgImage.ImageTransparency = 0.52
+	hubBgImage.ScaleType = Enum.ScaleType.Crop
+	hubBgImage.ZIndex = 11
+	hubBgImage.Parent = hubWindow
+
+	local hubOverlay = Instance.new("Frame")
+	hubOverlay.Name = "HubOverlay"
+	hubOverlay.Size = UDim2.new(1, 0, 1, 0)
+	hubOverlay.Position = UDim2.new(0, 0, 0, 0)
+	hubOverlay.BackgroundColor3 = Color3.fromRGB(15, 18, 25)
+	hubOverlay.BackgroundTransparency = 0.45
+	hubOverlay.BorderSizePixel = 0
+	hubOverlay.ZIndex = 12
+	hubOverlay.Parent = hubWindow
+
+	local topBar = Instance.new("Frame")
+	topBar.Name = "TopBar"
+	topBar.Size = UDim2.new(1, 0, 0, 62)
+	topBar.Position = UDim2.new(0, 0, 0, 0)
+	topBar.BackgroundTransparency = 1
+	topBar.ZIndex = 14
+	topBar.Parent = hubWindow
+
+	local hubLogo = Instance.new("ImageLabel")
+	hubLogo.Name = "HubLogo"
+	hubLogo.Size = UDim2.new(0, 44, 0, 44)
+	hubLogo.Position = UDim2.new(0, 18, 0.5, 0)
+	hubLogo.AnchorPoint = Vector2.new(0, 0.5)
+	hubLogo.BackgroundColor3 = Color3.fromRGB(14, 18, 26)
+	hubLogo.BorderSizePixel = 0
+	hubLogo.Image = currentBgAsset
+	hubLogo.ScaleType = Enum.ScaleType.Crop
+	hubLogo.ZIndex = 15
+	hubLogo.Parent = topBar
+
+	local hubLogoCorner = Instance.new("UICorner")
+	hubLogoCorner.CornerRadius = UDim.new(1, 0)
+	hubLogoCorner.Parent = hubLogo
+
+	local hubLogoStroke = Instance.new("UIStroke")
+	hubLogoStroke.Color = Color3.fromRGB(50, 175, 255)
+	hubLogoStroke.Thickness = 1.8
+	hubLogoStroke.Parent = hubLogo
+
+	local hubTitle = Instance.new("TextLabel")
+	hubTitle.Name = "HubTitle"
+	hubTitle.Size = UDim2.new(0, 260, 0, 26)
+	hubTitle.Position = UDim2.new(0, 72, 0, 11)
+	hubTitle.BackgroundTransparency = 1
+	hubTitle.Font = Enum.Font.GothamBold
+	hubTitle.Text = "ANDZ HUB"
+	hubTitle.TextColor3 = Color3.fromRGB(245, 248, 255)
+	hubTitle.TextSize = 19
+	hubTitle.TextXAlignment = Enum.TextXAlignment.Left
+	hubTitle.ZIndex = 15
+	hubTitle.Parent = topBar
+
+	local hubSub = Instance.new("TextLabel")
+	hubSub.Name = "HubSub"
+	hubSub.Size = UDim2.new(0, 320, 0, 16)
+	hubSub.Position = UDim2.new(0, 72, 0, 35)
+	hubSub.BackgroundTransparency = 1
+	hubSub.Font = Enum.Font.GothamMedium
+	hubSub.Text = "MENU CHỨC NĂNG • ĐÃ KÍCH HOẠT"
+	hubSub.TextColor3 = Color3.fromRGB(140, 225, 175)
+	hubSub.TextSize = 11
+	hubSub.TextXAlignment = Enum.TextXAlignment.Left
+	hubSub.ZIndex = 15
+	hubSub.Parent = topBar
+
+	local hubMinBtn = Instance.new("TextButton")
+	hubMinBtn.Name = "HubMinBtn"
+	hubMinBtn.Size = UDim2.new(0, 32, 0, 30)
+	hubMinBtn.Position = UDim2.new(1, -78, 0, 15)
+	hubMinBtn.BackgroundColor3 = Color3.fromRGB(36, 42, 54)
+	hubMinBtn.BackgroundTransparency = 0.2
+	hubMinBtn.BorderSizePixel = 0
+	hubMinBtn.Font = Enum.Font.GothamBold
+	hubMinBtn.Text = "-"
+	hubMinBtn.TextColor3 = Color3.fromRGB(235, 240, 248)
+	hubMinBtn.TextSize = 16
+	hubMinBtn.ZIndex = 16
+	hubMinBtn.Parent = topBar
+
+	local hubMinCorner = Instance.new("UICorner")
+	hubMinCorner.CornerRadius = UDim.new(0, 7)
+	hubMinCorner.Parent = hubMinBtn
+
+	local hubCloseBtn = Instance.new("TextButton")
+	hubCloseBtn.Name = "HubCloseBtn"
+	hubCloseBtn.Size = UDim2.new(0, 32, 0, 30)
+	hubCloseBtn.Position = UDim2.new(1, -40, 0, 15)
+	hubCloseBtn.BackgroundColor3 = Color3.fromRGB(36, 42, 54)
+	hubCloseBtn.BackgroundTransparency = 0.2
+	hubCloseBtn.BorderSizePixel = 0
+	hubCloseBtn.Font = Enum.Font.GothamBold
+	hubCloseBtn.Text = "×"
+	hubCloseBtn.TextColor3 = Color3.fromRGB(235, 240, 248)
+	hubCloseBtn.TextSize = 17
+	hubCloseBtn.ZIndex = 16
+	hubCloseBtn.Parent = topBar
+
+	local hubCloseCorner = Instance.new("UICorner")
+	hubCloseCorner.CornerRadius = UDim.new(0, 7)
+	hubCloseCorner.Parent = hubCloseBtn
+
+	local tabBar = Instance.new("Frame")
+	tabBar.Name = "TabBar"
+	tabBar.Size = UDim2.new(0, 126, 1, -74)
+	tabBar.Position = UDim2.new(0, 16, 0, 64)
+	tabBar.BackgroundTransparency = 1
+	tabBar.ZIndex = 14
+	tabBar.Parent = hubWindow
+
+	local tabLayout = Instance.new("UIListLayout")
+	tabLayout.FillDirection = Enum.FillDirection.Vertical
+	tabLayout.Padding = UDim.new(0, 8)
+	tabLayout.Parent = tabBar
+
+	local function makeTabBtn(text, active)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1, 0, 0, 40)
+		b.BackgroundColor3 = active and Color3.fromRGB(242, 245, 250) or Color3.fromRGB(32, 37, 47)
+		b.BackgroundTransparency = active and 0 or 0.25
+		b.BorderSizePixel = 0
+		b.Font = Enum.Font.GothamBold
+		b.Text = text
+		b.TextColor3 = active and Color3.fromRGB(18, 22, 29) or Color3.fromRGB(220, 228, 240)
+		b.TextSize = 13
+		b.ZIndex = 15
+		b.Parent = tabBar
+
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 8)
+		c.Parent = b
+		return b
+	end
+
+	local mainTabBtn = makeTabBtn("MAIN", true)
+	local miscTabBtn = makeTabBtn("MISC", false)
+
+	local contentArea = Instance.new("Frame")
+	contentArea.Name = "ContentArea"
+	contentArea.Size = UDim2.new(1, -164, 1, -74)
+	contentArea.Position = UDim2.new(0, 150, 0, 64)
+	contentArea.BackgroundColor3 = Color3.fromRGB(24, 28, 37)
+	contentArea.BackgroundTransparency = 0.25
+	contentArea.BorderSizePixel = 0
+	contentArea.ZIndex = 14
+	contentArea.Parent = hubWindow
+
+	local contentCorner = Instance.new("UICorner")
+	contentCorner.CornerRadius = UDim.new(0, 10)
+	contentCorner.Parent = contentArea
+
+	local contentStroke = Instance.new("UIStroke")
+	contentStroke.Color = Color3.fromRGB(255, 255, 255)
+	contentStroke.Transparency = 0.88
+	contentStroke.Thickness = 1
+	contentStroke.Parent = contentArea
+
+	local mainPage = Instance.new("ScrollingFrame")
+	mainPage.Name = "MainPage"
+	mainPage.Size = UDim2.new(1, -16, 1, -16)
+	mainPage.Position = UDim2.new(0, 8, 0, 8)
+	mainPage.BackgroundTransparency = 1
+	mainPage.ScrollBarThickness = 4
+	mainPage.CanvasSize = UDim2.new(0, 0, 0, 290)
+	mainPage.Visible = true
+	mainPage.ZIndex = 15
+	mainPage.Parent = contentArea
+
+	local mainLayout = Instance.new("UIListLayout")
+	mainLayout.Padding = UDim.new(0, 8)
+	mainLayout.Parent = mainPage
+
+	local miscPage = Instance.new("ScrollingFrame")
+	miscPage.Name = "MiscPage"
+	miscPage.Size = UDim2.new(1, -16, 1, -16)
+	miscPage.Position = UDim2.new(0, 8, 0, 8)
+	miscPage.BackgroundTransparency = 1
+	miscPage.ScrollBarThickness = 4
+	miscPage.CanvasSize = UDim2.new(0, 0, 0, 290)
+	miscPage.Visible = false
+	miscPage.ZIndex = 15
+	miscPage.Parent = contentArea
+
+	local function createActionRow(parent, labelText, btnText, yPos)
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 42)
+		row.Position = yPos and UDim2.new(0, 0, 0, yPos) or UDim2.new(0, 0, 0, 0)
+		row.BackgroundColor3 = Color3.fromRGB(32, 37, 48)
+		row.BackgroundTransparency = 0.25
+		row.BorderSizePixel = 0
+		row.ZIndex = 16
+		row.Parent = parent
+
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0, 8)
+		rc.Parent = row
+
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.new(1, -124, 1, 0)
+		lbl.Position = UDim2.new(0, 12, 0, 0)
+		lbl.BackgroundTransparency = 1
+		lbl.Font = Enum.Font.GothamMedium
+		lbl.Text = labelText
+		lbl.TextColor3 = Color3.fromRGB(235, 240, 248)
+		lbl.TextSize = 12.5
+		lbl.TextXAlignment = Enum.TextXAlignment.Left
+		lbl.ZIndex = 17
+		lbl.Parent = row
+
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(0, 104, 0, 30)
+		btn.Position = UDim2.new(1, -112, 0.5, 0)
+		btn.AnchorPoint = Vector2.new(0, 0.5)
+		btn.BackgroundColor3 = Color3.fromRGB(242, 245, 250)
+		btn.BorderSizePixel = 0
+		btn.Font = Enum.Font.GothamBold
+		btn.Text = btnText
+		btn.TextColor3 = Color3.fromRGB(18, 22, 29)
+		btn.TextSize = 11.5
+		btn.ZIndex = 17
+		btn.Parent = row
+
+		local bc = Instance.new("UICorner")
+		bc.CornerRadius = UDim.new(0, 7)
+		bc.Parent = btn
+
+		return row, lbl, btn
+	end
+
+	-- Các chức năng tab MAIN
+	local speedEnabled = false
+	local _, _, speedBtn = createActionRow(mainPage, "Tốc độ chạy (WalkSpeed 36)", "TẮT", nil)
+	speedBtn.MouseButton1Click:Connect(function()
+		speedEnabled = not speedEnabled
+		speedBtn.Text = speedEnabled and "BẬT" or "TẮT"
+		pcall(function()
+			local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.WalkSpeed = speedEnabled and 36 or 16
+			end
+		end)
+		pulseIsland(speedEnabled and "SPEED ON" or "SPEED OFF", "WalkSpeed: " .. (speedEnabled and "36" or "16"), speedEnabled and Color3.fromRGB(115, 245, 160) or Color3.fromRGB(185, 200, 220))
+	end)
+
+	local jumpEnabled = false
+	local _, _, jumpBtn = createActionRow(mainPage, "Nhảy cao (JumpPower 85)", "TẮT", nil)
+	jumpBtn.MouseButton1Click:Connect(function()
+		jumpEnabled = not jumpEnabled
+		jumpBtn.Text = jumpEnabled and "BẬT" or "TẮT"
+		pcall(function()
+			local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.UseJumpPower = true
+				hum.JumpPower = jumpEnabled and 85 or 50
+			end
+		end)
+		pulseIsland(jumpEnabled and "JUMP ON" or "JUMP OFF", "JumpPower: " .. (jumpEnabled and "85" or "50"), jumpEnabled and Color3.fromRGB(115, 245, 160) or Color3.fromRGB(185, 200, 220))
+	end)
+
+	local noclipEnabled = false
+	local _, _, noclipBtn = createActionRow(mainPage, "Xuyên vật thể (Noclip)", "TẮT", nil)
+	noclipBtn.MouseButton1Click:Connect(function()
+		noclipEnabled = not noclipEnabled
+		noclipBtn.Text = noclipEnabled and "BẬT" or "TẮT"
+		pulseIsland(noclipEnabled and "NOCLIP ON" or "NOCLIP OFF", "Noclip: " .. (noclipEnabled and "Bật" or "Tắt"), noclipEnabled and Color3.fromRGB(115, 245, 160) or Color3.fromRGB(185, 200, 220))
+	end)
+
+	RunService.Stepped:Connect(function()
+		if noclipEnabled and plr.Character then
+			for _, part in ipairs(plr.Character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CanCollide = false
+				end
+			end
+		end
+	end)
+
+	local antiAfkEnabled = false
+	local _, _, afkBtn = createActionRow(mainPage, "Chống treo máy (Anti-AFK)", "TẮT", nil)
+	afkBtn.MouseButton1Click:Connect(function()
+		antiAfkEnabled = not antiAfkEnabled
+		afkBtn.Text = antiAfkEnabled and "BẬT" or "TẮT"
+		pulseIsland(antiAfkEnabled and "AFK GUARD" or "AFK OFF", "Anti-AFK: " .. (antiAfkEnabled and "Đang bật" or "Đã tắt"), antiAfkEnabled and Color3.fromRGB(115, 245, 160) or Color3.fromRGB(185, 200, 220))
+	end)
+
+	plr.Idled:Connect(function()
+		if antiAfkEnabled then
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new())
+			end)
+		end
+	end)
+
+	local _, _, rejoinBtn = createActionRow(mainPage, "Vào lại máy chủ (Rejoin)", "REJOIN", nil)
+	rejoinBtn.MouseButton1Click:Connect(function()
+		pulseIsland("REJOINING", "Đang kết nối lại máy chủ...", Color3.fromRGB(255, 205, 95))
+		pcall(function()
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, plr)
+		end)
+	end)
+
+	-- Tab MISC: Đổi nền menu giữa ảnh này hoặc ảnh kia + tự lưu
+	applyGlobalThemeAsset = function(assetStr, note, shouldSave)
+		local norm = normalizeAssetId(assetStr)
+		if not norm then
+			hubSub.Text = "ID ảnh không hợp lệ!"
+			pulseIsland("BAD ID", "ID ảnh không hợp lệ", Color3.fromRGB(255, 110, 110))
+			return
+		end
+		currentBgAsset = norm
+		hubBgImage.Image = currentBgAsset
+		hubLogo.Image = currentBgAsset
+		hubFloatBtn.Image = currentBgAsset
+		islandIcon.Image = currentBgAsset
+		hubSub.Text = note or ("ĐÃ ĐỔI NỀN: " .. currentBgAsset)
+		if shouldSave ~= false then
+			saveBgFile(currentBgAsset)
+		end
+		pulseIsland("BG UPDATED", "Nền: " .. currentBgAsset, Color3.fromRGB(120, 220, 255))
+	end
+
+	createActionRow(miscPage, "Ảnh nền 1 (79283889919078)", "DÙNG ẢNH 1", 0).MouseButton1Click:Connect(function()
+		applyGlobalThemeAsset(ANDZ_IMG_1, "ĐANG DÙNG ẢNH 1 (79283889919078)", true)
+	end)
+
+	local _, _, useImg2Btn = createActionRow(miscPage, "Ảnh nền 2 (126488474446741)", "DÙNG ẢNH 2", 50)
+	useImg2Btn.MouseButton1Click:Connect(function()
+		applyGlobalThemeAsset(ANDZ_IMG_2, "ĐANG DÙNG ẢNH 2 (126488474446741)", true)
+	end)
+
+	local customBgRow = Instance.new("Frame")
+	customBgRow.Size = UDim2.new(1, 0, 0, 44)
+	customBgRow.Position = UDim2.new(0, 0, 0, 102)
+	customBgRow.BackgroundColor3 = Color3.fromRGB(32, 37, 48)
+	customBgRow.BackgroundTransparency = 0.25
+	customBgRow.BorderSizePixel = 0
+	customBgRow.ZIndex = 16
+	customBgRow.Parent = miscPage
+
+	local customCorner = Instance.new("UICorner")
+	customCorner.CornerRadius = UDim.new(0, 8)
+	customCorner.Parent = customBgRow
+
+	local customBox = Instance.new("TextBox")
+	customBox.Size = UDim2.new(1, -124, 1, -10)
+	customBox.Position = UDim2.new(0, 10, 0, 5)
+	customBox.BackgroundColor3 = Color3.fromRGB(22, 26, 35)
+	customBox.BorderSizePixel = 0
+	customBox.Font = Enum.Font.GothamMedium
+	customBox.PlaceholderText = "Nhập ID ảnh khác..."
+	customBox.PlaceholderColor3 = Color3.fromRGB(135, 145, 160)
+	customBox.Text = ""
+	customBox.TextColor3 = Color3.fromRGB(240, 245, 252)
+	customBox.TextSize = 12
+	customBox.ClearTextOnFocus = false
+	customBox.ZIndex = 17
+	customBox.Parent = customBgRow
+
+	local customBoxCorner = Instance.new("UICorner")
+	customBoxCorner.CornerRadius = UDim.new(0, 6)
+	customBoxCorner.Parent = customBox
+
+	local applyCustomBtn = Instance.new("TextButton")
+	applyCustomBtn.Size = UDim2.new(0, 104, 0, 30)
+	applyCustomBtn.Position = UDim2.new(1, -112, 0.5, 0)
+	applyCustomBtn.AnchorPoint = Vector2.new(0, 0.5)
+	applyCustomBtn.BackgroundColor3 = Color3.fromRGB(242, 245, 250)
+	applyCustomBtn.BorderSizePixel = 0
+	applyCustomBtn.Font = Enum.Font.GothamBold
+	applyCustomBtn.Text = "ĐỔI NỀN"
+	applyCustomBtn.TextColor3 = Color3.fromRGB(18, 22, 29)
+	applyCustomBtn.TextSize = 11.5
+	applyCustomBtn.ZIndex = 17
+	applyCustomBtn.Parent = customBgRow
+
+	local applyCustomCorner = Instance.new("UICorner")
+	applyCustomCorner.CornerRadius = UDim.new(0, 7)
+	applyCustomCorner.Parent = applyCustomBtn
+
+	applyCustomBtn.MouseButton1Click:Connect(function()
+		applyGlobalThemeAsset(customBox.Text, nil, true)
+	end)
+
+	local function setActiveTab(isMain)
+		mainPage.Visible = isMain
+		miscPage.Visible = not isMain
+
+		mainTabBtn.BackgroundColor3 = isMain and Color3.fromRGB(242, 245, 250) or Color3.fromRGB(32, 37, 47)
+		mainTabBtn.BackgroundTransparency = isMain and 0 or 0.25
+		mainTabBtn.TextColor3 = isMain and Color3.fromRGB(18, 22, 29) or Color3.fromRGB(220, 228, 240)
+
+		miscTabBtn.BackgroundColor3 = (not isMain) and Color3.fromRGB(242, 245, 250) or Color3.fromRGB(32, 37, 47)
+		miscTabBtn.BackgroundTransparency = (not isMain) and 0 or 0.25
+		miscTabBtn.TextColor3 = (not isMain) and Color3.fromRGB(18, 22, 29) or Color3.fromRGB(220, 228, 240)
+	end
+
+	mainTabBtn.MouseButton1Click:Connect(function()
+		setActiveTab(true)
+	end)
+
+	miscTabBtn.MouseButton1Click:Connect(function()
+		setActiveTab(false)
+	end)
+
+	hubMinBtn.MouseButton1Click:Connect(function()
+		hubWindow.Visible = not hubWindow.Visible
+	end)
+
+	hubCloseBtn.MouseButton1Click:Connect(function()
+		hubWindow.Visible = false
+	end)
+
+	hubFloatBtn.MouseButton1Click:Connect(function()
+		hubWindow.Visible = not hubWindow.Visible
+	end)
+
+	diBg1Btn.MouseButton1Click:Connect(function()
+		applyGlobalThemeAsset(ANDZ_IMG_1, "ĐANG DÙNG ẢNH 1 (79283889919078)", true)
+	end)
+
+	diBg2Btn.MouseButton1Click:Connect(function()
+		applyGlobalThemeAsset(ANDZ_IMG_2, "ĐANG DÙNG ẢNH 2 (126488474446741)", true)
+	end)
+
+	toggleActiveWindow = function()
+		if hubGui.Enabled then
+			hubWindow.Visible = not hubWindow.Visible
+			pulseIsland(hubWindow.Visible and "HUB SHOWN" or "HUB HIDDEN", hubWindow.Visible and "Đã mở menu ANDZ HUB" or "Đã thu gọn menu", Color3.fromRGB(120, 220, 255))
+		end
+	end
+
+	diToggleMenuBtn.MouseButton1Click:Connect(function()
+		if toggleActiveWindow then
+			toggleActiveWindow()
+		end
+	end)
+
+	makeDraggable(hubFloatBtn)
+	makeDraggable(hubWindow, topBar)
+
+	openMainHub = function(key)
+		script_key = key
+		getfenv(0).script_key = key
+		getfenv(1).script_key = key
+		getgenv().script_key = key
+
+		hubGui.Enabled = true
+		hubWindow.Visible = true
+		pulseIsland("VERIFIED", "Key hợp lệ • Đã mở ANDZ HUB", Color3.fromRGB(115, 245, 160))
+
+		if ANDZ_LOAD_AFTER_VALID ~= "" then
+			pcall(function()
+				if ANDZ_LOAD_AFTER_VALID:match("^https?://") then
+					local okSrc, src = httpGetBody(ANDZ_LOAD_AFTER_VALID)
+					if okSrc and src ~= "" then
+						loadstring(src)()
+					end
+				else
+					loadstring(ANDZ_LOAD_AFTER_VALID)()
+				end
+			end)
+		end
+	end
+end
+
+-- ==========================================
+-- GIAO DIỆN ĐĂNG NHẬP KEY
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AndzProxyGui"
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+addToGui(ScreenGui)
+
+local FloatButton = Instance.new("ImageButton")
+FloatButton.Name = "FloatButton"
+FloatButton.Size = UDim2.new(0, 74, 0, 74)
+FloatButton.Position = UDim2.new(0, 56, 0.5, 0)
+FloatButton.AnchorPoint = Vector2.new(0, 0.5)
+FloatButton.BackgroundColor3 = Color3.fromRGB(14, 18, 26)
+FloatButton.BorderSizePixel = 0
+FloatButton.Image = currentBgAsset
+FloatButton.ScaleType = Enum.ScaleType.Crop
+FloatButton.ZIndex = 20
+FloatButton.Parent = ScreenGui
+
+local FloatCorner = Instance.new("UICorner")
+FloatCorner.CornerRadius = UDim.new(1, 0)
+FloatCorner.Parent = FloatButton
+
+local FloatStroke = Instance.new("UIStroke")
+FloatStroke.Color = Color3.fromRGB(45, 165, 255)
+FloatStroke.Thickness = 2.2
+FloatStroke.Parent = FloatButton
+
+local MainWindow = Instance.new("Frame")
+MainWindow.Name = "MainWindow"
+MainWindow.Size = UDim2.new(0, 540, 0, 290)
+MainWindow.Position = UDim2.new(0.5, 0, 0.5, 0)
+MainWindow.AnchorPoint = Vector2.new(0.5, 0.5)
+MainWindow.BackgroundColor3 = Color3.fromRGB(22, 26, 34)
+MainWindow.BorderSizePixel = 0
+MainWindow.ClipsDescendants = true
+MainWindow.ZIndex = 10
+MainWindow.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 14)
+MainCorner.Parent = MainWindow
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(255, 255, 255)
+MainStroke.Transparency = 0.86
+MainStroke.Thickness = 1
+MainStroke.Parent = MainWindow
+
+local BgArt = Instance.new("ImageLabel")
+BgArt.Name = "BgArt"
+BgArt.Size = UDim2.new(1, 0, 1, 0)
+BgArt.Position = UDim2.new(0, 0, 0, 0)
+BgArt.BackgroundTransparency = 1
+BgArt.Image = currentBgAsset
+BgArt.ImageTransparency = 0.55
+BgArt.ScaleType = Enum.ScaleType.Crop
+BgArt.ZIndex = 11
+BgArt.Parent = MainWindow
+
+local BgDarkOverlay = Instance.new("Frame")
+BgDarkOverlay.Name = "BgDarkOverlay"
+BgDarkOverlay.Size = UDim2.new(1, 0, 1, 0)
+BgDarkOverlay.Position = UDim2.new(0, 0, 0, 0)
+BgDarkOverlay.BackgroundColor3 = Color3.fromRGB(16, 19, 26)
+BgDarkOverlay.BackgroundTransparency = 0.42
+BgDarkOverlay.BorderSizePixel = 0
+BgDarkOverlay.ZIndex = 12
+BgDarkOverlay.Parent = MainWindow
+
+local TopBar = Instance.new("Frame")
+TopBar.Name = "TopBar"
+TopBar.Size = UDim2.new(1, 0, 0, 74)
+TopBar.Position = UDim2.new(0, 0, 0, 0)
+TopBar.BackgroundTransparency = 1
+TopBar.ZIndex = 13
+TopBar.Parent = MainWindow
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Name = "TitleLabel"
+TitleLabel.Size = UDim2.new(0, 260, 0, 32)
+TitleLabel.Position = UDim2.new(0, 22, 0, 14)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Text = "Đăng nhập bằng key"
+TitleLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+TitleLabel.TextSize = 21
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.ZIndex = 14
+TitleLabel.Parent = TopBar
+
+local SubLabel = Instance.new("TextLabel")
+SubLabel.Name = "SubLabel"
+SubLabel.Size = UDim2.new(0, 260, 0, 18)
+SubLabel.Position = UDim2.new(0, 22, 0, 44)
+SubLabel.BackgroundTransparency = 1
+SubLabel.Font = Enum.Font.GothamMedium
+SubLabel.Text = "ANDZ LICENSE VERIFICATION"
+SubLabel.TextColor3 = Color3.fromRGB(185, 195, 210)
+SubLabel.TextSize = 11
+SubLabel.TextXAlignment = Enum.TextXAlignment.Left
+SubLabel.ZIndex = 14
+SubLabel.Parent = TopBar
+
+local CenterLogo = Instance.new("ImageLabel")
+CenterLogo.Name = "CenterLogo"
+CenterLogo.Size = UDim2.new(0, 62, 0, 62)
+CenterLogo.Position = UDim2.new(0.5, 0, 0, 10)
+CenterLogo.AnchorPoint = Vector2.new(0.5, 0)
+CenterLogo.BackgroundColor3 = Color3.fromRGB(12, 16, 24)
+CenterLogo.BorderSizePixel = 0
+CenterLogo.Image = currentBgAsset
+CenterLogo.ScaleType = Enum.ScaleType.Crop
+CenterLogo.ZIndex = 15
+CenterLogo.Parent = TopBar
+
+local CenterLogoCorner = Instance.new("UICorner")
+CenterLogoCorner.CornerRadius = UDim.new(1, 0)
+CenterLogoCorner.Parent = CenterLogo
+
+local CenterLogoStroke = Instance.new("UIStroke")
+CenterLogoStroke.Color = Color3.fromRGB(50, 175, 255)
+CenterLogoStroke.Thickness = 2
+CenterLogoStroke.Parent = CenterLogo
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Name = "MinBtn"
+MinBtn.Size = UDim2.new(0, 32, 0, 30)
+MinBtn.Position = UDim2.new(1, -78, 0, 14)
+MinBtn.BackgroundColor3 = Color3.fromRGB(36, 42, 54)
+MinBtn.BackgroundTransparency = 0.25
+MinBtn.BorderSizePixel = 0
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.Text = "-"
+MinBtn.TextColor3 = Color3.fromRGB(230, 236, 245)
+MinBtn.TextSize = 16
+MinBtn.ZIndex = 15
+MinBtn.Parent = TopBar
+
+local MinCorner = Instance.new("UICorner")
+MinCorner.CornerRadius = UDim.new(0, 7)
+MinCorner.Parent = MinBtn
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "CloseBtn"
+CloseBtn.Size = UDim2.new(0, 32, 0, 30)
+CloseBtn.Position = UDim2.new(1, -40, 0, 14)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(36, 42, 54)
+CloseBtn.BackgroundTransparency = 0.25
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(230, 236, 245)
+CloseBtn.TextSize = 17
+CloseBtn.ZIndex = 15
+CloseBtn.Parent = TopBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 7)
+CloseCorner.Parent = CloseBtn
+
+local KeyCaption = Instance.new("TextLabel")
+KeyCaption.Name = "KeyCaption"
+KeyCaption.Size = UDim2.new(1, -44, 0, 18)
+KeyCaption.Position = UDim2.new(0, 22, 0, 86)
+KeyCaption.BackgroundTransparency = 1
+KeyCaption.Font = Enum.Font.GothamBold
+KeyCaption.Text = "KEY KÍCH HOẠT"
+KeyCaption.TextColor3 = Color3.fromRGB(205, 214, 226)
+KeyCaption.TextSize = 11.5
+KeyCaption.TextXAlignment = Enum.TextXAlignment.Left
+KeyCaption.ZIndex = 14
+KeyCaption.Parent = MainWindow
+
+local InputRow = Instance.new("Frame")
+InputRow.Name = "InputRow"
+InputRow.Size = UDim2.new(1, -44, 0, 48)
+InputRow.Position = UDim2.new(0, 22, 0, 110)
+InputRow.BackgroundTransparency = 1
+InputRow.ZIndex = 14
+InputRow.Parent = MainWindow
+
+local KeyBoxFrame = Instance.new("Frame")
+KeyBoxFrame.Name = "KeyBoxFrame"
+KeyBoxFrame.Size = UDim2.new(1, -138, 1, 0)
+KeyBoxFrame.Position = UDim2.new(0, 0, 0, 0)
+KeyBoxFrame.BackgroundColor3 = Color3.fromRGB(32, 37, 46)
+KeyBoxFrame.BackgroundTransparency = 0.2
+KeyBoxFrame.BorderSizePixel = 0
+KeyBoxFrame.ZIndex = 14
+KeyBoxFrame.Parent = InputRow
+
+local KeyBoxCorner = Instance.new("UICorner")
+KeyBoxCorner.CornerRadius = UDim.new(0, 8)
+KeyBoxCorner.Parent = KeyBoxFrame
+
+local KeyBoxStroke = Instance.new("UIStroke")
+KeyBoxStroke.Color = Color3.fromRGB(255, 255, 255)
+KeyBoxStroke.Transparency = 0.85
+KeyBoxStroke.Thickness = 1
+KeyBoxStroke.Parent = KeyBoxFrame
+
+local KeyTextBox = Instance.new("TextBox")
+KeyTextBox.Name = "KeyTextBox"
+KeyTextBox.Size = UDim2.new(1, -42, 1, 0)
+KeyTextBox.Position = UDim2.new(0, 14, 0, 0)
+KeyTextBox.BackgroundTransparency = 1
+KeyTextBox.Font = Enum.Font.GothamMedium
+KeyTextBox.PlaceholderText = "Nhập key kích hoạt..."
+KeyTextBox.PlaceholderColor3 = Color3.fromRGB(130, 140, 155)
+KeyTextBox.Text = ""
+KeyTextBox.TextColor3 = Color3.fromRGB(240, 245, 252)
+KeyTextBox.TextSize = 14
+KeyTextBox.TextXAlignment = Enum.TextXAlignment.Left
+KeyTextBox.ClearTextOnFocus = false
+KeyTextBox.ZIndex = 15
+KeyTextBox.Parent = KeyBoxFrame
+
+local KeyDot = Instance.new("Frame")
+KeyDot.Name = "KeyDot"
+KeyDot.Size = UDim2.new(0, 9, 0, 9)
+KeyDot.Position = UDim2.new(1, -16, 0.5, 0)
+KeyDot.AnchorPoint = Vector2.new(0.5, 0.5)
+KeyDot.BackgroundColor3 = Color3.fromRGB(220, 226, 235)
+KeyDot.BorderSizePixel = 0
+KeyDot.ZIndex = 15
+KeyDot.Parent = KeyBoxFrame
+
+local KeyDotCorner = Instance.new("UICorner")
+KeyDotCorner.CornerRadius = UDim.new(1, 0)
+KeyDotCorner.Parent = KeyDot
+
+local LoginBtn = Instance.new("TextButton")
+LoginBtn.Name = "LoginBtn"
+LoginBtn.Size = UDim2.new(0, 128, 1, 0)
+LoginBtn.Position = UDim2.new(1, -128, 0, 0)
+LoginBtn.BackgroundColor3 = Color3.fromRGB(242, 245, 250)
+LoginBtn.BorderSizePixel = 0
+LoginBtn.Font = Enum.Font.GothamBold
+LoginBtn.Text = "ĐĂNG NHẬP"
+LoginBtn.TextColor3 = Color3.fromRGB(18, 22, 29)
+LoginBtn.TextSize = 13
+LoginBtn.ZIndex = 15
+LoginBtn.Parent = InputRow
+
+local LoginCorner = Instance.new("UICorner")
+LoginCorner.CornerRadius = UDim.new(0, 8)
+LoginCorner.Parent = LoginBtn
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Name = "StatusLabel"
+StatusLabel.Size = UDim2.new(1, -44, 0, 20)
+StatusLabel.Position = UDim2.new(0, 22, 0, 166)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Font = Enum.Font.GothamMedium
+StatusLabel.Text = "Sẵn sàng xác thực key."
+StatusLabel.TextColor3 = Color3.fromRGB(210, 218, 230)
+StatusLabel.TextSize = 12.5
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.ZIndex = 14
+StatusLabel.Parent = MainWindow
+
+local ActionRow = Instance.new("Frame")
+ActionRow.Name = "ActionRow"
+ActionRow.Size = UDim2.new(1, -44, 0, 48)
+ActionRow.Position = UDim2.new(0, 22, 1, -72)
+ActionRow.BackgroundTransparency = 1
+ActionRow.ZIndex = 14
+ActionRow.Parent = MainWindow
+
+local ActionLayout = Instance.new("UIListLayout")
+ActionLayout.FillDirection = Enum.FillDirection.Horizontal
+ActionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+ActionLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+ActionLayout.Padding = UDim.new(0, 10)
+ActionLayout.Parent = ActionRow
+
+local function createBottomBtn(name, text, isPrimary)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.new(0.322, 0, 1, 0)
+	btn.BackgroundColor3 = isPrimary and Color3.fromRGB(242, 245, 250) or Color3.fromRGB(36, 40, 48)
+	btn.BackgroundTransparency = isPrimary and 0 or 0.25
+	btn.BorderSizePixel = 0
+	btn.Font = Enum.Font.GothamBold
+	btn.Text = text
+	btn.TextColor3 = isPrimary and Color3.fromRGB(18, 22, 29) or Color3.fromRGB(225, 232, 242)
+	btn.TextSize = 12.5
+	btn.ZIndex = 15
+	btn.Parent = ActionRow
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = btn
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Transparency = isPrimary and 1 or 0.85
+	stroke.Thickness = 1
+	stroke.Parent = btn
+
+	return btn
+end
+
+local GetKeyBtn  = createBottomBtn("GetKeyBtn", "GET KEY", true)
+local PasteKeyBtn = createBottomBtn("PasteKeyBtn", "DÁN KEY", false)
+local SaveKeyBtn  = createBottomBtn("SaveKeyBtn", "LƯU KEY", false)
+
+makeDraggable(FloatButton)
+makeDraggable(MainWindow, TopBar)
+
+local isBusy = false
+local isMinimized = false
+
+local function setStatus(msg, color)
+	StatusLabel.Text = tostring(msg)
+	StatusLabel.TextColor3 = color or Color3.fromRGB(210, 218, 230)
+end
+
+local function submitKey(rawKey, autoMode)
+	if isBusy then return end
+	local cleanKey = tostring(rawKey or ""):gsub("%s+", "")
+	if cleanKey == "" then
+		if not autoMode then
+			setStatus("Vui lòng nhập key trước khi đăng nhập.", Color3.fromRGB(255, 120, 120))
+			pulseIsland("NO KEY", "Chưa nhập key kích hoạt", Color3.fromRGB(255, 110, 110))
+		end
+		return
+	end
+
+	isBusy = true
+	LoginBtn.Text = "ĐANG CHECK..."
+	setStatus("Đang kiểm tra key qua máy chủ ANDZ...", Color3.fromRGB(145, 210, 255))
+	pulseIsland("CHECKING", "Đang xác thực key...", Color3.fromRGB(145, 210, 255))
+
+	local valid, msg = verifyKeyApi(cleanKey)
+
+	LoginBtn.Text = "ĐĂNG NHẬP"
+	isBusy = false
+
+	if valid then
+		KeyDot.BackgroundColor3 = Color3.fromRGB(70, 235, 130)
+		saveKeyFile(cleanKey)
+		setStatus(msg, Color3.fromRGB(115, 245, 160))
+		task.wait(0.3)
+		ScreenGui:Destroy()
+		openMainHub(cleanKey)
+	else
+		KeyDot.BackgroundColor3 = Color3.fromRGB(255, 90, 90)
+		if autoMode then
+			clearSavedKeyFile()
+		end
+		setStatus(msg, Color3.fromRGB(255, 115, 115))
+		pulseIsland("INVALID", msg, Color3.fromRGB(255, 110, 110))
+	end
+end
+
+LoginBtn.MouseButton1Click:Connect(function()
+	submitKey(KeyTextBox.Text, false)
+end)
+
+KeyTextBox.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		submitKey(KeyTextBox.Text, false)
+	end
+end)
+
+GetKeyBtn.MouseButton1Click:Connect(function()
+	local copied = false
+	pcall(function()
+		if setclipboard then
+			setclipboard(ANDZ_GET_KEY_URL)
+			copied = true
+		elseif toclipboard then
+			toclipboard(ANDZ_GET_KEY_URL)
+			copied = true
+		end
+	end)
+	if copied then
+		setStatus("Đã sao chép link Get Key: " .. ANDZ_GET_KEY_URL, Color3.fromRGB(130, 225, 255))
+		pulseIsland("COPIED", "Đã sao chép link Get Key", Color3.fromRGB(120, 220, 255))
+	else
+		setStatus("Link Get Key: " .. ANDZ_GET_KEY_URL, Color3.fromRGB(130, 225, 255))
+	end
+end)
+
+PasteKeyBtn.MouseButton1Click:Connect(function()
+	local clip = nil
+	pcall(function()
+		if getclipboard then
+			clip = getclipboard()
+		end
+	end)
+	if clip and tostring(clip):gsub("%s+", "") ~= "" then
+		KeyTextBox.Text = tostring(clip):gsub("%s+", "")
+		setStatus("Đã dán key từ bộ nhớ tạm.", Color3.fromRGB(160, 235, 190))
+		pulseIsland("PASTED", "Đã dán key từ clipboard", Color3.fromRGB(115, 245, 160))
+	else
+		setStatus("Không đọc được bộ nhớ tạm hoặc clipboard trống.", Color3.fromRGB(255, 150, 120))
+	end
+end)
+
+SaveKeyBtn.MouseButton1Click:Connect(function()
+	local cleanKey = tostring(KeyTextBox.Text or ""):gsub("%s+", "")
+	if cleanKey == "" then
+		setStatus("Chưa có key nào để lưu.", Color3.fromRGB(255, 120, 120))
+		return
+	end
+	saveKeyFile(cleanKey)
+	setStatus("Đã lưu key vào " .. ANDZ_SAVE_FILE, Color3.fromRGB(130, 225, 255))
+	pulseIsland("SAVED", "Đã lưu key thành công", Color3.fromRGB(120, 220, 255))
+end)
+
+MinBtn.MouseButton1Click:Connect(function()
+	isMinimized = not isMinimized
+	MainWindow.Visible = not isMinimized
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+	MainWindow.Visible = false
+end)
+
+FloatButton.MouseButton1Click:Connect(function()
+	MainWindow.Visible = not MainWindow.Visible
+	isMinimized = not MainWindow.Visible
+end)
+
+local savedKey = loadSavedKeyFile()
+if savedKey then
+	KeyTextBox.Text = savedKey
+	setStatus("Đã tự động tải key đã lưu.", Color3.fromRGB(185, 225, 255))
+	pulseIsland("AUTO KEY", "Đang tự động kiểm tra key đã lưu...", Color3.fromRGB(145, 210, 255))
+	task.spawn(function()
+		task.wait(0.25)
+		submitKey(savedKey, true)
+	end)
+end
