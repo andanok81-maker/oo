@@ -1,0 +1,1585 @@
+-- ==========================================
+-- CONFIG
+-- ==========================================
+local API_URL         = "https://andzvclra.andanok81.workers.dev/api.php"
+local GET_KEY_URL     = "https://andzvclra.andanok81.workers.dev/vuotlink"
+local SAVE_FILE       = "andz_saved_key.txt"
+
+-- File ảnh trong Delta/Workspace
+local LOGO_LOCAL_FILE = "anngu.jpg" -- đổi thành "logo.png" nếu muốn dùng logo cũ
+local BG_LOCAL_FILE   = "anngu.jpg"   -- nếu có ok.jpg trong Workspace sẽ làm nền menu
+local LOGO_DIRECT_URL = ""
+local LOGO_ASSET_ID   = ""
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local parentGui = (pcall(function() return CoreGui.Name end) and CoreGui) or playerGui
+for _, name in ipairs({ "AndzKeyMenu", "AndzEspHub", "AndzEspOverlay" }) do
+    if parentGui:FindFirstChild(name) then
+        parentGui[name]:Destroy()
+    end
+end
+
+-- ==========================================
+-- HELPER FUNCTIONS (EXECUTOR COMPATIBLE)
+-- ==========================================
+local function getHWID()
+    local hwid = tostring(player.UserId)
+    pcall(function()
+        if gethwid then
+            hwid = tostring(gethwid())
+        elseif getexecutorhwid then
+            hwid = tostring(getexecutorhwid())
+        elseif game:GetService("RbxAnalyticsService").GetClientId then
+            hwid = tostring(game:GetService("RbxAnalyticsService"):GetClientId())
+        end
+    end)
+    return hwid
+end
+
+local function httpRequestGet(url)
+    local lastErr = "Không thể kết nối tới máy chủ."
+
+    local reqCandidates = {
+        request,
+        http_request,
+        (syn and syn.request),
+        (http and http.request),
+        (fluxus and fluxus.request),
+        (krnl and krnl.request)
+    }
+
+    for _, reqFn in ipairs(reqCandidates) do
+        if type(reqFn) == "function" then
+            local ok, res = pcall(function()
+                return reqFn({
+                    Url = url,
+                    Method = "GET",
+                    Headers = {
+                        ["User-Agent"] = "Mozilla/5.0"
+                    }
+                })
+            end)
+            if ok and type(res) == "table" then
+                local body = res.Body or res.body
+                if body and tostring(body) ~= "" then
+                    return true, tostring(body)
+                end
+                lastErr = "HTTP " .. tostring(res.StatusCode or res.status or "?") .. " (Body rỗng)"
+            elseif not ok then
+                lastErr = tostring(res)
+            end
+        end
+    end
+
+    local okGet, resGet = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if okGet and resGet and tostring(resGet) ~= "" then
+        return true, tostring(resGet)
+    elseif not okGet then
+        lastErr = tostring(resGet)
+    end
+
+    return false, lastErr
+end
+
+local function resolveLocalAsset(fileName)
+    if getcustomasset and fileName and fileName ~= "" and isfile and isfile(fileName) then
+        local ok, asset = pcall(getcustomasset, fileName)
+        if ok and asset then
+            return tostring(asset), true
+        end
+    end
+    return "", false
+end
+
+local function resolveLogoImage()
+    local localAsset, okLocal = resolveLocalAsset(LOGO_LOCAL_FILE)
+    if okLocal then
+        return localAsset, true
+    end
+
+    if getcustomasset and LOGO_DIRECT_URL ~= "" and writefile then
+        local cachedName = "andz_custom_logo.png"
+        local okGet, raw = httpRequestGet(LOGO_DIRECT_URL)
+        if okGet and raw and #raw > 0 then
+            pcall(writefile, cachedName, raw)
+            local okAsset, asset = pcall(getcustomasset, cachedName)
+            if okAsset and asset then
+                return tostring(asset), true
+            end
+        end
+    end
+
+    if LOGO_ASSET_ID ~= "" then
+        return LOGO_ASSET_ID, true
+    end
+
+    return "", false
+end
+
+local function copyText(txt)
+    local ok = pcall(function()
+        if setclipboard then
+            setclipboard(txt)
+        elseif toclipboard then
+            toclipboard(txt)
+        else
+            error("no clipboard")
+        end
+    end)
+    return ok
+end
+
+local function pasteText()
+    local result = nil
+    pcall(function()
+        if getclipboard then
+            result = getclipboard()
+        end
+    end)
+    return result
+end
+
+local function saveKeyToFile(k)
+    pcall(function()
+        if writefile then
+            writefile(SAVE_FILE, k)
+        end
+    end)
+end
+
+local function loadKeyFromFile()
+    local k = nil
+    pcall(function()
+        if isfile and readfile and isfile(SAVE_FILE) then
+            k = readfile(SAVE_FILE)
+        end
+    end)
+    return k
+end
+
+local function urlEncode(str)
+    str = tostring(str or "")
+    str = str:gsub("\n", "\r\n")
+    str = str:gsub("([^%w%-_%.~ ])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+    str = str:gsub(" ", "+")
+    return str
+end
+
+local function extractExpiryFromBody(body)
+    if not body or body == "" then
+        return "Không có dữ liệu từ API"
+    end
+
+    local patterns = {
+        '"expires_at"%s*:%s*"([^"]+)"',
+        '"expire_at"%s*:%s*"([^"]+)"',
+        '"expires"%s*:%s*"([^"]+)"',
+        '"expired_at"%s*:%s*"([^"]+)"',
+        '"expiry"%s*:%s*"([^"]+)"',
+        '"exp"%s*:%s*"([^"]+)"',
+        '"time_left"%s*:%s*"([^"]+)"',
+        '"remaining"%s*:%s*"([^"]+)"'
+    }
+
+    for _, pat in ipairs(patterns) do
+        local val = body:match(pat)
+        if val and val ~= "" then
+            return val
+        end
+    end
+
+    local numPat = {
+        '"expires_at"%s*:%s*(%d+)',
+        '"expire_at"%s*:%s*(%d+)',
+        '"expires"%s*:%s*(%d+)',
+        '"exp"%s*:%s*(%d+)'
+    }
+    for _, pat in ipairs(numPat) do
+        local num = body:match(pat)
+        if num then
+            local ts = tonumber(num)
+            if ts and ts > 1600000000 then
+                local okDate, formatted = pcall(function()
+                    return os.date("%d/%m/%Y %H:%M:%S", ts)
+                end)
+                if okDate and formatted then
+                    return tostring(formatted)
+                end
+            end
+            return tostring(num)
+        end
+    end
+
+    return "API không trả về hạn key"
+end
+
+local resolvedLogo, hasCustomLogo = resolveLogoImage()
+local resolvedBg, hasBgImage = resolveLocalAsset(BG_LOCAL_FILE)
+
+local keyInfoState = {
+    Key = "",
+    Expires = "Đang cập nhật..."
+}
+
+local function buildAndzBadge(container, showFullTag)
+    if hasCustomLogo then return end
+
+    local bgGrad = Instance.new("UIGradient")
+    bgGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(8, 24, 52)),
+        ColorSequenceKeypoint.new(0.55, Color3.fromRGB(7, 12, 22)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 34, 68))
+    })
+    bgGrad.Rotation = 135
+    bgGrad.Parent = container
+
+    local letterA = Instance.new("TextLabel")
+    letterA.Size = UDim2.new(1, 0, 0.54, 0)
+    letterA.Position = UDim2.new(0, 0, 0.04, 0)
+    letterA.BackgroundTransparency = 1
+    letterA.Text = "A"
+    letterA.TextColor3 = Color3.fromRGB(235, 244, 255)
+    letterA.TextSize = showFullTag and 20 or 15
+    letterA.Font = Enum.Font.GothamBlack
+    letterA.Parent = container
+
+    local andzText = Instance.new("TextLabel")
+    andzText.Size = UDim2.new(1, -2, 0.24, 0)
+    andzText.Position = UDim2.new(0, 1, 0.54, 0)
+    andzText.BackgroundTransparency = 1
+    andzText.Text = "ANDZ"
+    andzText.TextColor3 = Color3.fromRGB(240, 246, 255)
+    andzText.TextSize = showFullTag and 9 or 7
+    andzText.Font = Enum.Font.GothamBlack
+    andzText.Parent = container
+
+    local proxyText = Instance.new("TextLabel")
+    proxyText.Size = UDim2.new(1, 0, 0.18, 0)
+    proxyText.Position = UDim2.new(0, 0, 0.77, 0)
+    proxyText.BackgroundTransparency = 1
+    proxyText.Text = showFullTag and "-PROXY-" or "PROXY"
+    proxyText.TextColor3 = Color3.fromRGB(36, 185, 255)
+    proxyText.TextSize = showFullTag and 7 or 6
+    proxyText.Font = Enum.Font.GothamBold
+    proxyText.Parent = container
+end
+
+local function applyTransparentMenuStyle(cardFrame, cornerRadius)
+    cardFrame.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    cardFrame.BackgroundTransparency = hasBgImage and 0.35 or 0.26
+
+    if hasBgImage and resolvedBg ~= "" then
+        local bgImg = Instance.new("ImageLabel")
+        bgImg.Name = "MenuBackgroundOkJpg"
+        bgImg.Size = UDim2.new(1, 0, 1, 0)
+        bgImg.Position = UDim2.new(0, 0, 0, 0)
+        bgImg.BackgroundTransparency = 1
+        bgImg.Image = resolvedBg
+        bgImg.ImageTransparency = 0.12
+        bgImg.ScaleType = Enum.ScaleType.Crop
+        bgImg.ZIndex = 0
+        bgImg.Parent = cardFrame
+
+        local bgCorner = Instance.new("UICorner")
+        bgCorner.CornerRadius = UDim.new(0, cornerRadius or 15)
+        bgCorner.Parent = bgImg
+
+        local darkScrim = Instance.new("Frame")
+        darkScrim.Name = "MenuReadabilityScrim"
+        darkScrim.Size = UDim2.new(1, 0, 1, 0)
+        darkScrim.Position = UDim2.new(0, 0, 0, 0)
+        darkScrim.BackgroundColor3 = Color3.fromRGB(10, 12, 18)
+        darkScrim.BackgroundTransparency = 0.52
+        darkScrim.BorderSizePixel = 0
+        darkScrim.ZIndex = 0
+        darkScrim.Parent = cardFrame
+
+        local scrimCorner = Instance.new("UICorner")
+        scrimCorner.CornerRadius = UDim.new(0, cornerRadius or 15)
+        scrimCorner.Parent = darkScrim
+    end
+
+    for _, child in ipairs(cardFrame:GetChildren()) do
+        if child:IsA("GuiObject") and child.Name ~= "MenuBackgroundOkJpg" and child.Name ~= "MenuReadabilityScrim" then
+            child.ZIndex = math.max(child.ZIndex, 2)
+        end
+    end
+end
+
+local function createDynamicTopBar(parentGuiObj, titleText, onRestore)
+    local pill = Instance.new("TextButton")
+    pill.Name = "DynamicTopIsland"
+    pill.AnchorPoint = Vector2.new(0.5, 0)
+    pill.Size = UDim2.new(0, 210, 0, 32)
+    pill.Position = UDim2.new(0.5, 0, 0, 8)
+    pill.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    pill.BackgroundTransparency = 0.18
+    pill.BorderSizePixel = 0
+    pill.Text = ""
+    pill.Visible = false
+    pill.Active = true
+    pill.Draggable = true
+    pill.ZIndex = 20
+    pill.Parent = parentGuiObj
+
+    local pillCorner = Instance.new("UICorner")
+    pillCorner.CornerRadius = UDim.new(1, 0)
+    pillCorner.Parent = pill
+
+    local pillStroke = Instance.new("UIStroke")
+    pillStroke.Color = Color3.fromRGB(36, 185, 255)
+    pillStroke.Thickness = 1.4
+    pillStroke.Parent = pill
+
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 8, 0, 8)
+    dot.Position = UDim2.new(0, 12, 0.5, -4)
+    dot.BackgroundColor3 = Color3.fromRGB(36, 185, 255)
+    dot.BorderSizePixel = 0
+    dot.ZIndex = 21
+    dot.Parent = pill
+
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = dot
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -28, 1, 0)
+    lbl.Position = UDim2.new(0, 24, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = titleText .. " • Bấm để mở"
+    lbl.TextColor3 = Color3.fromRGB(245, 248, 255)
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextTruncate = Enum.TextTruncate.AtEnd
+    lbl.ZIndex = 21
+    lbl.Parent = pill
+
+    pill.MouseButton1Click:Connect(function()
+        pill.Visible = false
+        if onRestore then
+            onRestore()
+        end
+    end)
+
+    return pill
+end
+
+-- ==========================================
+-- ESP & MISC ENGINE
+-- ==========================================
+local espState = {
+    Line = false,
+    Box = false,
+    Fov = false,
+    FovRadius = 120
+}
+
+local miscState = {
+    Fly = false,
+    FlySpeed = 55,
+    Speed = false,
+    WalkSpeed = 32
+}
+
+local defaultWalkSpeed = 16
+pcall(function()
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then defaultWalkSpeed = hum.WalkSpeed end
+end)
+
+local hasDrawing = (pcall(function() return Drawing.new end) and Drawing) ~= nil
+local espOverlayGui = Instance.new("ScreenGui")
+espOverlayGui.Name = "AndzEspOverlay"
+espOverlayGui.ResetOnSpawn = false
+espOverlayGui.IgnoreGuiInset = true
+espOverlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+espOverlayGui.Parent = parentGui
+
+local fovGuiFrame = Instance.new("Frame")
+fovGuiFrame.Name = "FovCircleGui"
+fovGuiFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovGuiFrame.Position = UDim2.fromOffset(0, 0)
+fovGuiFrame.Size = UDim2.fromOffset(espState.FovRadius * 2, espState.FovRadius * 2)
+fovGuiFrame.BackgroundTransparency = 1
+fovGuiFrame.Visible = false
+fovGuiFrame.Parent = espOverlayGui
+
+local fovGuiCorner = Instance.new("UICorner")
+fovGuiCorner.CornerRadius = UDim.new(1, 0)
+fovGuiCorner.Parent = fovGuiFrame
+
+local fovGuiStroke = Instance.new("UIStroke")
+fovGuiStroke.Color = Color3.fromRGB(36, 185, 255)
+fovGuiStroke.Thickness = 1.6
+fovGuiStroke.Parent = fovGuiFrame
+
+local fovDrawingCircle = nil
+if hasDrawing then
+    pcall(function()
+        fovDrawingCircle = Drawing.new("Circle")
+        fovDrawingCircle.Thickness = 1.6
+        fovDrawingCircle.NumSides = 64
+        fovDrawingCircle.Radius = espState.FovRadius
+        fovDrawingCircle.Filled = false
+        fovDrawingCircle.Color = Color3.fromRGB(36, 185, 255)
+        fovDrawingCircle.Visible = false
+    end)
+end
+
+local playerVisuals = {}
+
+local function createPlayerEsp(plr)
+    if plr == player or playerVisuals[plr] then return end
+
+    local item = {
+        drawingLine = nil,
+        drawingBox = nil,
+        guiLine = Instance.new("Frame"),
+        guiBox = Instance.new("Frame"),
+        guiBoxStroke = Instance.new("UIStroke")
+    }
+
+    item.guiLine.Name = "EspLine_" .. plr.Name
+    item.guiLine.BackgroundColor3 = Color3.fromRGB(36, 185, 255)
+    item.guiLine.BorderSizePixel = 0
+    item.guiLine.AnchorPoint = Vector2.new(0.5, 0.5)
+    item.guiLine.Visible = false
+    item.guiLine.Parent = espOverlayGui
+
+    item.guiBox.Name = "EspBox_" .. plr.Name
+    item.guiBox.BackgroundTransparency = 1
+    item.guiBox.BorderSizePixel = 0
+    item.guiBox.Visible = false
+    item.guiBox.Parent = espOverlayGui
+
+    item.guiBoxStroke.Color = Color3.fromRGB(255, 85, 85)
+    item.guiBoxStroke.Thickness = 1.5
+    item.guiBoxStroke.Parent = item.guiBox
+
+    if hasDrawing then
+        pcall(function()
+            item.drawingLine = Drawing.new("Line")
+            item.drawingLine.Thickness = 1.5
+            item.drawingLine.Color = Color3.fromRGB(36, 185, 255)
+            item.drawingLine.Visible = false
+
+            item.drawingBox = Drawing.new("Square")
+            item.drawingBox.Thickness = 1.5
+            item.drawingBox.Filled = false
+            item.drawingBox.Color = Color3.fromRGB(255, 85, 85)
+            item.drawingBox.Visible = false
+        end)
+    end
+
+    playerVisuals[plr] = item
+end
+
+local function removePlayerEsp(plr)
+    local item = playerVisuals[plr]
+    if not item then return end
+    pcall(function()
+        if item.drawingLine then item.drawingLine:Remove() end
+        if item.drawingBox then item.drawingBox:Remove() end
+        if item.guiLine then item.guiLine:Destroy() end
+        if item.guiBox then item.guiBox:Destroy() end
+    end)
+    playerVisuals[plr] = nil
+end
+
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= player then
+        createPlayerEsp(plr)
+    end
+end
+Players.PlayerAdded:Connect(createPlayerEsp)
+Players.PlayerRemoving:Connect(removePlayerEsp)
+
+local function hideEspItem(item)
+    item.guiLine.Visible = false
+    item.guiBox.Visible = false
+    if item.drawingLine then item.drawingLine.Visible = false end
+    if item.drawingBox then item.drawingBox.Visible = false end
+end
+
+local function updateGuiLine(frame, p1, p2)
+    local dx = p2.X - p1.X
+    local dy = p2.Y - p1.Y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist < 2 or dist > 2500 then
+        frame.Visible = false
+        return
+    end
+    frame.Size = UDim2.fromOffset(dist, 1.5)
+    frame.Position = UDim2.fromOffset((p1.X + p2.X) * 0.5, (p1.Y + p2.Y) * 0.5)
+    frame.Rotation = math.deg(math.atan2(dy, dx))
+    frame.Visible = true
+end
+
+local flyBodyVel = nil
+local flyBodyGyro = nil
+
+local function cleanupFly()
+    if flyBodyVel then
+        pcall(function() flyBodyVel:Destroy() end)
+        flyBodyVel = nil
+    end
+    if flyBodyGyro then
+        pcall(function() flyBodyGyro:Destroy() end)
+        flyBodyGyro = nil
+    end
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function() hum.PlatformStand = false end)
+    end
+end
+
+local function updateFlyAndSpeed()
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not char or not hrp or not hum or hum.Health <= 0 then
+        cleanupFly()
+        return
+    end
+
+    if miscState.Speed then
+        hum.WalkSpeed = miscState.WalkSpeed
+    else
+        hum.WalkSpeed = defaultWalkSpeed
+    end
+
+    if miscState.Fly then
+        hum.PlatformStand = true
+        if not flyBodyVel or flyBodyVel.Parent ~= hrp then
+            cleanupFly()
+            hum.PlatformStand = true
+            flyBodyVel = Instance.new("BodyVelocity")
+            flyBodyVel.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            flyBodyVel.Velocity = Vector3.zero
+            flyBodyVel.Parent = hrp
+
+            flyBodyGyro = Instance.new("BodyGyro")
+            flyBodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+            flyBodyGyro.P = 9e4
+            flyBodyGyro.CFrame = hrp.CFrame
+            flyBodyGyro.Parent = hrp
+        end
+
+        local cam = workspace.CurrentCamera
+        local moveDir = hum.MoveDirection
+        local vel = Vector3.zero
+
+        if moveDir.Magnitude > 0.05 then
+            local lookFlat = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+            local forward = Vector3.new(lookFlat.X, 0, lookFlat.Z)
+            if forward.Magnitude > 0.001 then
+                forward = forward.Unit
+                local right = Vector3.new(-forward.Z, 0, forward.X)
+                local fwdAmt = moveDir:Dot(forward)
+                local rightAmt = moveDir:Dot(right)
+                local aimDir = (cam.CFrame.LookVector * fwdAmt + right * rightAmt)
+                if aimDir.Magnitude > 0.001 then
+                    vel = aimDir.Unit * miscState.FlySpeed
+                end
+            else
+                vel = moveDir.Unit * miscState.FlySpeed
+            end
+        end
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.E) then
+            vel = vel + Vector3.new(0, miscState.FlySpeed, 0)
+        elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+            vel = vel - Vector3.new(0, miscState.FlySpeed, 0)
+        end
+
+        flyBodyVel.Velocity = vel
+        if cam then
+            flyBodyGyro.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + cam.CFrame.LookVector)
+        end
+    else
+        cleanupFly()
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    updateFlyAndSpeed()
+
+    Camera = workspace.CurrentCamera
+    if not Camera then return end
+
+    local vp = Camera.ViewportSize
+    local centerScreen = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+    local originLine = Vector2.new(vp.X * 0.5, vp.Y)
+
+    fovGuiFrame.Visible = espState.Fov
+    fovGuiFrame.Position = UDim2.fromOffset(centerScreen.X, centerScreen.Y)
+    fovGuiFrame.Size = UDim2.fromOffset(espState.FovRadius * 2, espState.FovRadius * 2)
+
+    if fovDrawingCircle then
+        fovDrawingCircle.Visible = espState.Fov
+        fovDrawingCircle.Position = centerScreen
+        fovDrawingCircle.Radius = espState.FovRadius
+    end
+
+    for plr, item in pairs(playerVisuals) do
+        if not plr.Parent or (not espState.Line and not espState.Box) then
+            hideEspItem(item)
+        else
+            local char = plr.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local head = char and char:FindFirstChild("Head")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+            if not hrp or not head or not hum or hum.Health <= 0 then
+                hideEspItem(item)
+            else
+                local rootPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                if not onScreen or rootPos.Z <= 0 then
+                    hideEspItem(item)
+                else
+                    local topPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.6, 0))
+                    local botPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3.0, 0))
+
+                    local height = math.max(12, math.abs(botPos.Y - topPos.Y))
+                    local width = math.max(8, height * 0.58)
+                    local boxTopLeft = Vector2.new(rootPos.X - width * 0.5, topPos.Y)
+                    local footPoint = Vector2.new(rootPos.X, botPos.Y)
+
+                    if espState.Line then
+                        if item.drawingLine then
+                            item.drawingLine.From = originLine
+                            item.drawingLine.To = footPoint
+                            item.drawingLine.Visible = true
+                            item.guiLine.Visible = false
+                        else
+                            updateGuiLine(item.guiLine, originLine, footPoint)
+                        end
+                    else
+                        item.guiLine.Visible = false
+                        if item.drawingLine then item.drawingLine.Visible = false end
+                    end
+
+                    if espState.Box then
+                        if item.drawingBox then
+                            item.drawingBox.Size = Vector2.new(width, height)
+                            item.drawingBox.Position = boxTopLeft
+                            item.drawingBox.Visible = true
+                            item.guiBox.Visible = false
+                        else
+                            item.guiBox.Size = UDim2.fromOffset(width, height)
+                            item.guiBox.Position = UDim2.fromOffset(boxTopLeft.X, boxTopLeft.Y)
+                            item.guiBox.Visible = true
+                        end
+                    else
+                        item.guiBox.Visible = false
+                        if item.drawingBox then item.drawingBox.Visible = false end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- MAIN HUB (ESP + MISC + INFO)
+-- ==========================================
+local function openMainHub()
+    local espGui = Instance.new("ScreenGui")
+    espGui.Name = "AndzEspHub"
+    espGui.ResetOnSpawn = false
+    espGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    espGui.Parent = parentGui
+
+    local espToggleBtn = Instance.new("ImageButton")
+    espToggleBtn.Name = "EspToggleBtn"
+    espToggleBtn.Size = UDim2.new(0, 56, 0, 56)
+    espToggleBtn.Position = UDim2.new(0, 14, 0.5, -28)
+    espToggleBtn.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
+    espToggleBtn.BorderSizePixel = 0
+    espToggleBtn.Image = resolvedLogo
+    espToggleBtn.ScaleType = Enum.ScaleType.Crop
+    espToggleBtn.Active = true
+    espToggleBtn.Draggable = true
+    espToggleBtn.Parent = espGui
+
+    local espBtnCorner = Instance.new("UICorner")
+    espBtnCorner.CornerRadius = UDim.new(1, 0)
+    espBtnCorner.Parent = espToggleBtn
+
+    local espBtnStroke = Instance.new("UIStroke")
+    espBtnStroke.Color = Color3.fromRGB(36, 185, 255)
+    espBtnStroke.Thickness = 2
+    espBtnStroke.Parent = espToggleBtn
+
+    buildAndzBadge(espToggleBtn, true)
+
+    local espCard = Instance.new("Frame")
+    espCard.Name = "EspMainCard"
+    espCard.Size = UDim2.new(0, 360, 0, 232)
+    espCard.Position = UDim2.new(0.5, -180, 0.5, -116)
+    espCard.BackgroundColor3 = Color3.fromRGB(16, 16, 18)
+    espCard.BorderSizePixel = 0
+    espCard.Active = true
+    espCard.Draggable = true
+    espCard.Visible = true
+    espCard.Parent = espGui
+
+    local espCardCorner = Instance.new("UICorner")
+    espCardCorner.CornerRadius = UDim.new(0, 15)
+    espCardCorner.Parent = espCard
+
+    local espCardStroke = Instance.new("UIStroke")
+    espCardStroke.Color = Color3.fromRGB(42, 42, 48)
+    espCardStroke.Thickness = 1
+    espCardStroke.Parent = espCard
+
+    local hubDynamicBar = createDynamicTopBar(espGui, "ANDZ HUB", function()
+        espCard.Visible = true
+    end)
+
+    local function setHubVisible(state)
+        espCard.Visible = state
+        if state then
+            hubDynamicBar.Visible = false
+        end
+    end
+
+    local espTitle = Instance.new("TextLabel")
+    espTitle.Size = UDim2.new(1, -108, 0, 20)
+    espTitle.Position = UDim2.new(0, 16, 0, 10)
+    espTitle.BackgroundTransparency = 1
+    espTitle.Text = "ANDZ HUB"
+    espTitle.TextColor3 = Color3.fromRGB(245, 245, 248)
+    espTitle.TextSize = 15
+    espTitle.Font = Enum.Font.GothamBold
+    espTitle.TextXAlignment = Enum.TextXAlignment.Left
+    espTitle.Parent = espCard
+
+    local minEspBtn = Instance.new("TextButton")
+    minEspBtn.Size = UDim2.new(0, 24, 0, 24)
+    minEspBtn.Position = UDim2.new(1, -62, 0, 10)
+    minEspBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+    minEspBtn.BackgroundTransparency = 0.2
+    minEspBtn.Text = "-"
+    minEspBtn.TextColor3 = Color3.fromRGB(36, 185, 255)
+    minEspBtn.TextSize = 15
+    minEspBtn.Font = Enum.Font.GothamBold
+    minEspBtn.Parent = espCard
+
+    local minEspCorner = Instance.new("UICorner")
+    minEspCorner.CornerRadius = UDim.new(0, 7)
+    minEspCorner.Parent = minEspBtn
+
+    local hideEspBtn = Instance.new("TextButton")
+    hideEspBtn.Size = UDim2.new(0, 24, 0, 24)
+    hideEspBtn.Position = UDim2.new(1, -34, 0, 10)
+    hideEspBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+    hideEspBtn.BackgroundTransparency = 0.2
+    hideEspBtn.Text = "×"
+    hideEspBtn.TextColor3 = Color3.fromRGB(180, 180, 188)
+    hideEspBtn.TextSize = 15
+    hideEspBtn.Font = Enum.Font.GothamBold
+    hideEspBtn.Parent = espCard
+
+    local hideCorner = Instance.new("UICorner")
+    hideCorner.CornerRadius = UDim.new(0, 7)
+    hideCorner.Parent = hideEspBtn
+
+    minEspBtn.MouseButton1Click:Connect(function()
+        espCard.Visible = false
+        hubDynamicBar.Visible = true
+    end)
+
+    hideEspBtn.MouseButton1Click:Connect(function()
+        setHubVisible(false)
+    end)
+
+    espToggleBtn.MouseButton1Click:Connect(function()
+        setHubVisible(not espCard.Visible)
+    end)
+
+    -- Thanh 3 mục: ESP | MISC | INFO
+    local tabBar = Instance.new("Frame")
+    tabBar.Size = UDim2.new(1, -32, 0, 26)
+    tabBar.Position = UDim2.new(0, 16, 0, 34)
+    tabBar.BackgroundTransparency = 1
+    tabBar.Parent = espCard
+
+    local tabLayout = Instance.new("UIListLayout")
+    tabLayout.FillDirection = Enum.FillDirection.Horizontal
+    tabLayout.Padding = UDim.new(0, 8)
+    tabLayout.Parent = tabBar
+
+    local espPage = Instance.new("Frame")
+    espPage.Size = UDim2.new(1, -32, 1, -72)
+    espPage.Position = UDim2.new(0, 16, 0, 66)
+    espPage.BackgroundTransparency = 1
+    espPage.Visible = true
+    espPage.Parent = espCard
+
+    local miscPage = Instance.new("Frame")
+    miscPage.Size = UDim2.new(1, -32, 1, -72)
+    miscPage.Position = UDim2.new(0, 16, 0, 66)
+    miscPage.BackgroundTransparency = 1
+    miscPage.Visible = false
+    miscPage.Parent = espCard
+
+    local infoPage = Instance.new("Frame")
+    infoPage.Size = UDim2.new(1, -32, 1, -72)
+    infoPage.Position = UDim2.new(0, 16, 0, 66)
+    infoPage.BackgroundTransparency = 1
+    infoPage.Visible = false
+    infoPage.Parent = espCard
+
+    local tabButtons = {}
+    local function createTabBtn(text, targetPage)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0.3333, -5.3, 1, 0)
+        b.BackgroundColor3 = Color3.fromRGB(26, 26, 30)
+        b.BackgroundTransparency = 0.25
+        b.Text = text
+        b.TextColor3 = Color3.fromRGB(185, 185, 195)
+        b.TextSize = 11
+        b.Font = Enum.Font.GothamBold
+        b.Parent = tabBar
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 7)
+        c.Parent = b
+
+        local s = Instance.new("UIStroke")
+        s.Color = Color3.fromRGB(48, 48, 54)
+        s.Thickness = 1
+        s.Parent = b
+
+        table.insert(tabButtons, { btn = b, page = targetPage, stroke = s })
+        b.MouseButton1Click:Connect(function()
+            espPage.Visible = (targetPage == espPage)
+            miscPage.Visible = (targetPage == miscPage)
+            infoPage.Visible = (targetPage == infoPage)
+            for _, item in ipairs(tabButtons) do
+                local active = (item.page == targetPage)
+                item.btn.BackgroundColor3 = active and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(26, 26, 30)
+                item.btn.BackgroundTransparency = active and 0.08 or 0.25
+                item.btn.TextColor3 = active and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
+                item.stroke.Color = active and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(48, 48, 54)
+            end
+        end)
+        return b
+    end
+
+    local espTabBtn  = createTabBtn("ESP", espPage)
+    createTabBtn("MISC", miscPage)
+    createTabBtn("INFO", infoPage)
+
+    espTabBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
+    espTabBtn.BackgroundTransparency = 0.08
+    espTabBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
+
+    local function makeToggleRow(parent, labelText, yPos, getVal, setVal)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 34)
+        row.Position = UDim2.new(0, 0, 0, yPos)
+        row.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+        row.BackgroundTransparency = 0.28
+        row.BorderSizePixel = 0
+        row.Parent = parent
+
+        local rowCorner = Instance.new("UICorner")
+        rowCorner.CornerRadius = UDim.new(0, 9)
+        rowCorner.Parent = row
+
+        local rowStroke = Instance.new("UIStroke")
+        rowStroke.Color = Color3.fromRGB(48, 48, 54)
+        rowStroke.Thickness = 1
+        rowStroke.Parent = row
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.66, 0, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = labelText
+        lbl.TextColor3 = Color3.fromRGB(238, 238, 242)
+        lbl.TextSize = 12
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = row
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 74, 0, 24)
+        btn.Position = UDim2.new(1, -84, 0.5, -12)
+        local initOn = getVal()
+        btn.BackgroundColor3 = initOn and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(36, 36, 42)
+        btn.BackgroundTransparency = initOn and 0.08 or 0.2
+        btn.Text = initOn and "BẬT" or "TẮT"
+        btn.TextColor3 = initOn and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
+        btn.TextSize = 10
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = row
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 7)
+        btnCorner.Parent = btn
+
+        btn.MouseButton1Click:Connect(function()
+            local nextState = not getVal()
+            setVal(nextState)
+            btn.Text = nextState and "BẬT" or "TẮT"
+            btn.BackgroundColor3 = nextState and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(36, 36, 42)
+            btn.BackgroundTransparency = nextState and 0.08 or 0.2
+            btn.TextColor3 = nextState and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(185, 185, 195)
+        end)
+    end
+
+    local function makeStepperRow(parent, labelText, yPos, getVal, onStep)
+        local bar = Instance.new("Frame")
+        bar.Size = UDim2.new(1, 0, 0, 32)
+        bar.Position = UDim2.new(0, 0, 0, yPos)
+        bar.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+        bar.BackgroundTransparency = 0.28
+        bar.BorderSizePixel = 0
+        bar.Parent = parent
+
+        local barCorner = Instance.new("UICorner")
+        barCorner.CornerRadius = UDim.new(0, 8)
+        barCorner.Parent = bar
+
+        local valLabel = Instance.new("TextLabel")
+        valLabel.Size = UDim2.new(1, -84, 1, 0)
+        valLabel.Position = UDim2.new(0, 12, 0, 0)
+        valLabel.BackgroundTransparency = 1
+        valLabel.Text = labelText .. tostring(getVal())
+        valLabel.TextColor3 = Color3.fromRGB(185, 185, 195)
+        valLabel.TextSize = 11
+        valLabel.Font = Enum.Font.Code
+        valLabel.TextXAlignment = Enum.TextXAlignment.Left
+        valLabel.Parent = bar
+
+        local minusBtn = Instance.new("TextButton")
+        minusBtn.Size = UDim2.new(0, 28, 0, 22)
+        minusBtn.Position = UDim2.new(1, -66, 0.5, -11)
+        minusBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
+        minusBtn.BackgroundTransparency = 0.2
+        minusBtn.Text = "-"
+        minusBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
+        minusBtn.TextSize = 14
+        minusBtn.Font = Enum.Font.GothamBold
+        minusBtn.Parent = bar
+
+        local minusCorner = Instance.new("UICorner")
+        minusCorner.CornerRadius = UDim.new(0, 6)
+        minusCorner.Parent = minusBtn
+
+        local plusBtn = Instance.new("TextButton")
+        plusBtn.Size = UDim2.new(0, 28, 0, 22)
+        plusBtn.Position = UDim2.new(1, -34, 0.5, -11)
+        plusBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
+        plusBtn.BackgroundTransparency = 0.2
+        plusBtn.Text = "+"
+        plusBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
+        plusBtn.TextSize = 14
+        plusBtn.Font = Enum.Font.GothamBold
+        plusBtn.Parent = bar
+
+        local plusCorner = Instance.new("UICorner")
+        plusCorner.CornerRadius = UDim.new(0, 6)
+        plusCorner.Parent = plusBtn
+
+        local function refresh()
+            valLabel.Text = labelText .. tostring(getVal())
+        end
+
+        minusBtn.MouseButton1Click:Connect(function()
+            onStep(-1)
+            refresh()
+        end)
+        plusBtn.MouseButton1Click:Connect(function()
+            onStep(1)
+            refresh()
+        end)
+    end
+
+    -- --- TRANG ESP ---
+    makeToggleRow(espPage, "ESP Line (Kẻ tia)", 0,
+        function() return espState.Line end,
+        function(v) espState.Line = v end)
+
+    makeToggleRow(espPage, "ESP Box (Khung người chơi)", 40,
+        function() return espState.Box end,
+        function(v) espState.Box = v end)
+
+    makeToggleRow(espPage, "ESP FOV (Vòng tròn tâm)", 80,
+        function() return espState.Fov end,
+        function(v) espState.Fov = v end)
+
+    makeStepperRow(espPage, "FOV Size: ", 120,
+        function() return espState.FovRadius end,
+        function(dir)
+            espState.FovRadius = math.clamp(espState.FovRadius + dir * 15, 30, 350)
+        end)
+
+    -- --- TRANG MISC (BAY + CHẠY NHANH) ---
+    makeToggleRow(miscPage, "Bay (Fly)", 0,
+        function() return miscState.Fly end,
+        function(v)
+            miscState.Fly = v
+            if not v then cleanupFly() end
+        end)
+
+    makeStepperRow(miscPage, "Fly Speed: ", 40,
+        function() return miscState.FlySpeed end,
+        function(dir)
+            miscState.FlySpeed = math.clamp(miscState.FlySpeed + dir * 10, 15, 250)
+        end)
+
+    makeToggleRow(miscPage, "Chạy nhanh (Speed)", 76,
+        function() return miscState.Speed end,
+        function(v)
+            miscState.Speed = v
+            if not v then
+                local char = player.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                if hum then hum.WalkSpeed = defaultWalkSpeed end
+            end
+        end)
+
+    makeStepperRow(miscPage, "WalkSpeed: ", 116,
+        function() return miscState.WalkSpeed end,
+        function(dir)
+            miscState.WalkSpeed = math.clamp(miscState.WalkSpeed + dir * 8, 16, 200)
+        end)
+
+    -- --- TRANG INFO (KEY CỦA BẠN + HẠN KEY) ---
+    local keyBox = Instance.new("Frame")
+    keyBox.Size = UDim2.new(1, 0, 0, 68)
+    keyBox.Position = UDim2.new(0, 0, 0, 4)
+    keyBox.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    keyBox.BackgroundTransparency = 0.28
+    keyBox.BorderSizePixel = 0
+    keyBox.Parent = infoPage
+
+    local keyBoxCorner = Instance.new("UICorner")
+    keyBoxCorner.CornerRadius = UDim.new(0, 9)
+    keyBoxCorner.Parent = keyBox
+
+    local keyBoxStroke = Instance.new("UIStroke")
+    keyBoxStroke.Color = Color3.fromRGB(48, 48, 54)
+    keyBoxStroke.Thickness = 1
+    keyBoxStroke.Parent = keyBox
+
+    local keyTitleLbl = Instance.new("TextLabel")
+    keyTitleLbl.Size = UDim2.new(1, -90, 0, 18)
+    keyTitleLbl.Position = UDim2.new(0, 12, 0, 8)
+    keyTitleLbl.BackgroundTransparency = 1
+    keyTitleLbl.Text = "KEY CỦA BẠN"
+    keyTitleLbl.TextColor3 = Color3.fromRGB(36, 185, 255)
+    keyTitleLbl.TextSize = 10
+    keyTitleLbl.Font = Enum.Font.GothamBold
+    keyTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    keyTitleLbl.Parent = keyBox
+
+    local keyValLbl = Instance.new("TextLabel")
+    keyValLbl.Size = UDim2.new(1, -92, 0, 28)
+    keyValLbl.Position = UDim2.new(0, 12, 0, 28)
+    keyValLbl.BackgroundTransparency = 1
+    keyValLbl.Text = (keyInfoState.Key ~= "" and keyInfoState.Key) or "Chưa có key"
+    keyValLbl.TextColor3 = Color3.fromRGB(242, 242, 246)
+    keyValLbl.TextSize = 11
+    keyValLbl.Font = Enum.Font.Code
+    keyValLbl.TextXAlignment = Enum.TextXAlignment.Left
+    keyValLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    keyValLbl.Parent = keyBox
+
+    local copyMyKeyBtn = Instance.new("TextButton")
+    copyMyKeyBtn.Size = UDim2.new(0, 66, 0, 26)
+    copyMyKeyBtn.Position = UDim2.new(1, -76, 0.5, -13)
+    copyMyKeyBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
+    copyMyKeyBtn.BackgroundTransparency = 0.08
+    copyMyKeyBtn.Text = "COPY"
+    copyMyKeyBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
+    copyMyKeyBtn.TextSize = 10
+    copyMyKeyBtn.Font = Enum.Font.GothamBold
+    copyMyKeyBtn.Parent = keyBox
+
+    local copyMyKeyCorner = Instance.new("UICorner")
+    copyMyKeyCorner.CornerRadius = UDim.new(0, 7)
+    copyMyKeyCorner.Parent = copyMyKeyBtn
+
+    copyMyKeyBtn.MouseButton1Click:Connect(function()
+        if keyInfoState.Key ~= "" then
+            copyText(keyInfoState.Key)
+            copyMyKeyBtn.Text = "ĐÃ COPY"
+            task.delay(1.2, function()
+                if copyMyKeyBtn and copyMyKeyBtn.Parent then
+                    copyMyKeyBtn.Text = "COPY"
+                end
+            end)
+        end
+    end)
+
+    local expBox = Instance.new("Frame")
+    expBox.Size = UDim2.new(1, 0, 0, 66)
+    expBox.Position = UDim2.new(0, 0, 0, 82)
+    expBox.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    expBox.BackgroundTransparency = 0.28
+    expBox.BorderSizePixel = 0
+    expBox.Parent = infoPage
+
+    local expBoxCorner = Instance.new("UICorner")
+    expBoxCorner.CornerRadius = UDim.new(0, 9)
+    expBoxCorner.Parent = expBox
+
+    local expBoxStroke = Instance.new("UIStroke")
+    expBoxStroke.Color = Color3.fromRGB(48, 48, 54)
+    expBoxStroke.Thickness = 1
+    expBoxStroke.Parent = expBox
+
+    local expTitleLbl = Instance.new("TextLabel")
+    expTitleLbl.Size = UDim2.new(1, -24, 0, 18)
+    expTitleLbl.Position = UDim2.new(0, 12, 0, 8)
+    expTitleLbl.BackgroundTransparency = 1
+    expTitleLbl.Text = "THỜI GIAN HẾT HẠN KEY"
+    expTitleLbl.TextColor3 = Color3.fromRGB(36, 185, 255)
+    expTitleLbl.TextSize = 10
+    expTitleLbl.Font = Enum.Font.GothamBold
+    expTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    expTitleLbl.Parent = expBox
+
+    local expValLbl = Instance.new("TextLabel")
+    expValLbl.Size = UDim2.new(1, -24, 0, 28)
+    expValLbl.Position = UDim2.new(0, 12, 0, 28)
+    expValLbl.BackgroundTransparency = 1
+    expValLbl.Text = tostring(keyInfoState.Expires)
+    expValLbl.TextColor3 = Color3.fromRGB(242, 242, 246)
+    expValLbl.TextSize = 11
+    expValLbl.Font = Enum.Font.Code
+    expValLbl.TextXAlignment = Enum.TextXAlignment.Left
+    expValLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    expValLbl.Parent = expBox
+
+    applyTransparentMenuStyle(espCard, 15)
+end
+
+-- ==========================================
+-- KEY UI BUILDER
+-- ==========================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AndzKeyMenu"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = parentGui
+
+local toastFrame = Instance.new("Frame")
+toastFrame.Name = "Toast"
+toastFrame.Size = UDim2.new(0, 320, 0, 34)
+toastFrame.Position = UDim2.new(0.5, -160, 1, -48)
+toastFrame.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
+toastFrame.BackgroundTransparency = 0.2
+toastFrame.BorderSizePixel = 0
+toastFrame.Visible = false
+toastFrame.Parent = screenGui
+
+local toastCorner = Instance.new("UICorner")
+toastCorner.CornerRadius = UDim.new(0, 9)
+toastCorner.Parent = toastFrame
+
+local toastLabel = Instance.new("TextLabel")
+toastLabel.Size = UDim2.new(1, -18, 1, 0)
+toastLabel.Position = UDim2.new(0, 9, 0, 0)
+toastLabel.BackgroundTransparency = 1
+toastLabel.Text = ""
+toastLabel.TextColor3 = Color3.fromRGB(238, 238, 242)
+toastLabel.TextSize = 11
+toastLabel.Font = Enum.Font.GothamMedium
+toastLabel.TextXAlignment = Enum.TextXAlignment.Left
+toastLabel.TextTruncate = Enum.TextTruncate.AtEnd
+toastLabel.Parent = toastFrame
+
+local function showToast(msg)
+    toastLabel.Text = tostring(msg)
+    toastFrame.Visible = true
+    task.spawn(function()
+        task.wait(2.2)
+        if toastFrame and toastFrame.Parent then
+            toastFrame.Visible = false
+        end
+    end)
+end
+
+local toggleBtn = Instance.new("ImageButton")
+toggleBtn.Name = "ToggleMenuBtn"
+toggleBtn.Size = UDim2.new(0, 56, 0, 56)
+toggleBtn.Position = UDim2.new(0, 14, 0.5, -28)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Image = resolvedLogo
+toggleBtn.ScaleType = Enum.ScaleType.Crop
+toggleBtn.Active = true
+toggleBtn.Draggable = true
+toggleBtn.Parent = screenGui
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(1, 0)
+toggleCorner.Parent = toggleBtn
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(36, 175, 255)
+toggleStroke.Thickness = 2
+toggleStroke.Parent = toggleBtn
+
+buildAndzBadge(toggleBtn, true)
+
+local mainCard = Instance.new("Frame")
+mainCard.Name = "MainCard"
+mainCard.Size = UDim2.new(0, 460, 0, 214)
+mainCard.Position = UDim2.new(0.5, -230, 0.5, -107)
+mainCard.BackgroundColor3 = Color3.fromRGB(16, 16, 18)
+mainCard.BorderSizePixel = 0
+mainCard.Active = true
+mainCard.Draggable = true
+mainCard.Visible = true
+mainCard.Parent = screenGui
+
+local cardCorner = Instance.new("UICorner")
+cardCorner.CornerRadius = UDim.new(0, 15)
+cardCorner.Parent = mainCard
+
+local cardStroke = Instance.new("UIStroke")
+cardStroke.Color = Color3.fromRGB(42, 42, 48)
+cardStroke.Thickness = 1
+cardStroke.Parent = mainCard
+
+local keyDynamicBar = createDynamicTopBar(screenGui, "ANDZ KEY", function()
+    mainCard.Visible = true
+    toggleStroke.Color = Color3.fromRGB(240, 240, 245)
+end)
+
+local function setMenuVisible(state)
+    mainCard.Visible = state
+    if state then
+        keyDynamicBar.Visible = false
+    end
+    toggleStroke.Color = state and Color3.fromRGB(240, 240, 245) or Color3.fromRGB(36, 175, 255)
+end
+
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 24, 0, 24)
+minBtn.Position = UDim2.new(1, -62, 0, 12)
+minBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+minBtn.BackgroundTransparency = 0.2
+minBtn.Text = "-"
+minBtn.TextColor3 = Color3.fromRGB(36, 185, 255)
+minBtn.TextSize = 15
+minBtn.Font = Enum.Font.GothamBold
+minBtn.Parent = mainCard
+
+local minCorner = Instance.new("UICorner")
+minCorner.CornerRadius = UDim.new(0, 7)
+minCorner.Parent = minBtn
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 24)
+closeBtn.Position = UDim2.new(1, -34, 0, 12)
+closeBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+closeBtn.BackgroundTransparency = 0.2
+closeBtn.Text = "×"
+closeBtn.TextColor3 = Color3.fromRGB(170, 170, 178)
+closeBtn.TextSize = 15
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = mainCard
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 7)
+closeCorner.Parent = closeBtn
+
+minBtn.MouseButton1Click:Connect(function()
+    mainCard.Visible = false
+    keyDynamicBar.Visible = true
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    setMenuVisible(false)
+end)
+
+toggleBtn.MouseButton1Click:Connect(function()
+    setMenuVisible(not mainCard.Visible)
+end)
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(0, 195, 0, 22)
+titleLabel.Position = UDim2.new(0, 18, 0, 12)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Đăng nhập bằng key"
+titleLabel.TextColor3 = Color3.fromRGB(245, 245, 248)
+titleLabel.TextSize = 17
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = mainCard
+
+local subLabel = Instance.new("TextLabel")
+subLabel.Size = UDim2.new(0, 195, 0, 14)
+subLabel.Position = UDim2.new(0, 18, 0, 34)
+subLabel.BackgroundTransparency = 1
+subLabel.Text = "ANDZ LICENSE VERIFICATION"
+subLabel.TextColor3 = Color3.fromRGB(120, 120, 128)
+subLabel.TextSize = 9
+subLabel.Font = Enum.Font.GothamMedium
+subLabel.TextXAlignment = Enum.TextXAlignment.Left
+subLabel.Parent = mainCard
+
+local headerLogo = Instance.new("ImageLabel")
+headerLogo.Name = "HeaderLogo"
+headerLogo.Size = UDim2.new(0, 40, 0, 40)
+headerLogo.Position = UDim2.new(0, 214, 0, 11)
+headerLogo.BackgroundColor3 = Color3.fromRGB(8, 14, 26)
+headerLogo.BorderSizePixel = 0
+headerLogo.Image = resolvedLogo
+headerLogo.ScaleType = Enum.ScaleType.Crop
+headerLogo.Parent = mainCard
+
+local headerLogoCorner = Instance.new("UICorner")
+headerLogoCorner.CornerRadius = UDim.new(0, 10)
+headerLogoCorner.Parent = headerLogo
+
+local headerLogoStroke = Instance.new("UIStroke")
+headerLogoStroke.Color = Color3.fromRGB(36, 175, 255)
+headerLogoStroke.Thickness = 1.6
+headerLogoStroke.Parent = headerLogo
+
+buildAndzBadge(headerLogo, false)
+
+local keyTitle = Instance.new("TextLabel")
+keyTitle.Size = UDim2.new(1, -36, 0, 14)
+keyTitle.Position = UDim2.new(0, 18, 0, 56)
+keyTitle.BackgroundTransparency = 1
+keyTitle.Text = "KEY KÍCH HOẠT"
+keyTitle.TextColor3 = Color3.fromRGB(155, 155, 163)
+keyTitle.TextSize = 10
+keyTitle.Font = Enum.Font.GothamBold
+keyTitle.TextXAlignment = Enum.TextXAlignment.Left
+keyTitle.Parent = mainCard
+
+local inputBoxFrame = Instance.new("Frame")
+inputBoxFrame.Size = UDim2.new(1, -150, 0, 38)
+inputBoxFrame.Position = UDim2.new(0, 18, 0, 74)
+inputBoxFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+inputBoxFrame.BackgroundTransparency = 0.28
+inputBoxFrame.BorderSizePixel = 0
+inputBoxFrame.Parent = mainCard
+
+local inputCorner = Instance.new("UICorner")
+inputCorner.CornerRadius = UDim.new(0, 9)
+inputCorner.Parent = inputBoxFrame
+
+local inputStroke = Instance.new("UIStroke")
+inputStroke.Color = Color3.fromRGB(52, 52, 58)
+inputStroke.Thickness = 1
+inputStroke.Parent = inputBoxFrame
+
+local keyInput = Instance.new("TextBox")
+keyInput.Size = UDim2.new(1, -30, 1, 0)
+keyInput.Position = UDim2.new(0, 11, 0, 0)
+keyInput.BackgroundTransparency = 1
+keyInput.PlaceholderText = "Nhập key kích hoạt..."
+keyInput.PlaceholderColor3 = Color3.fromRGB(115, 115, 122)
+keyInput.Text = ""
+keyInput.TextColor3 = Color3.fromRGB(240, 240, 245)
+keyInput.TextSize = 12
+keyInput.Font = Enum.Font.Code
+keyInput.TextXAlignment = Enum.TextXAlignment.Left
+keyInput.ClearTextOnFocus = false
+keyInput.Parent = inputBoxFrame
+
+local dotIndicator = Instance.new("Frame")
+dotIndicator.Size = UDim2.new(0, 7, 0, 7)
+dotIndicator.Position = UDim2.new(1, -16, 0.5, -3.5)
+dotIndicator.BackgroundColor3 = Color3.fromRGB(210, 210, 215)
+dotIndicator.BorderSizePixel = 0
+dotIndicator.Parent = inputBoxFrame
+
+local dotCorner = Instance.new("UICorner")
+dotCorner.CornerRadius = UDim.new(1, 0)
+dotCorner.Parent = dotIndicator
+
+local loginBtn = Instance.new("TextButton")
+loginBtn.Size = UDim2.new(0, 118, 0, 38)
+loginBtn.Position = UDim2.new(1, -136, 0, 74)
+loginBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
+loginBtn.BackgroundTransparency = 0.08
+loginBtn.Text = "ĐĂNG NHẬP"
+loginBtn.TextColor3 = Color3.fromRGB(15, 15, 17)
+loginBtn.TextSize = 11
+loginBtn.Font = Enum.Font.GothamBold
+loginBtn.Parent = mainCard
+
+local loginCorner = Instance.new("UICorner")
+loginCorner.CornerRadius = UDim.new(0, 9)
+loginCorner.Parent = loginBtn
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -36, 0, 18)
+statusLabel.Position = UDim2.new(0, 18, 0, 118)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Sẵn sàng xác thực key."
+statusLabel.TextColor3 = Color3.fromRGB(160, 160, 168)
+statusLabel.TextSize = 11
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+statusLabel.Parent = mainCard
+
+local btnRow = Instance.new("Frame")
+btnRow.Size = UDim2.new(1, -36, 0, 36)
+btnRow.Position = UDim2.new(0, 18, 0, 160)
+btnRow.BackgroundTransparency = 1
+btnRow.Parent = mainCard
+
+local rowLayout = Instance.new("UIListLayout")
+rowLayout.FillDirection = Enum.FillDirection.Horizontal
+rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+rowLayout.Padding = UDim.new(0, 10)
+rowLayout.Parent = btnRow
+
+local function createActionBtn(text, isPrimary)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.3333, -7, 1, 0)
+    b.BackgroundColor3 = isPrimary and Color3.fromRGB(245, 245, 248) or Color3.fromRGB(24, 24, 28)
+    b.BackgroundTransparency = isPrimary and 0.08 or 0.25
+    b.Text = text
+    b.TextColor3 = isPrimary and Color3.fromRGB(15, 15, 17) or Color3.fromRGB(235, 235, 240)
+    b.TextSize = 11
+    b.Font = Enum.Font.GothamBold
+    b.Parent = btnRow
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 9)
+    c.Parent = b
+
+    if not isPrimary then
+        local s = Instance.new("UIStroke")
+        s.Color = Color3.fromRGB(52, 52, 58)
+        s.Thickness = 1
+        s.Parent = b
+    end
+    return b
+end
+
+local getKeyBtn   = createActionBtn("GET KEY", true)
+local pasteKeyBtn = createActionBtn("DÁN KEY", false)
+local saveKeyBtn  = createActionBtn("LƯU KEY", false)
+
+applyTransparentMenuStyle(mainCard, 15)
+
+local saved = loadKeyFromFile()
+if saved and saved ~= "" then
+    keyInput.Text = saved:gsub("%s+", "")
+    statusLabel.Text = "Đã tự động tải key đã lưu."
+end
+
+getKeyBtn.MouseButton1Click:Connect(function()
+    local copied = copyText(GET_KEY_URL)
+    if copied then
+        statusLabel.Text = "Đã copy link lấy key: " .. GET_KEY_URL
+        showToast("ANDZ đã sao chép link vượt key vào bộ nhớ tạm")
+    else
+        keyInput.Text = GET_KEY_URL
+        statusLabel.Text = "Hãy copy link từ ô nhập: " .. GET_KEY_URL
+        showToast("Đã điền link lấy key vào ô nhập")
+    end
+end)
+
+pasteKeyBtn.MouseButton1Click:Connect(function()
+    local clip = pasteText()
+    if clip and tostring(clip) ~= "" then
+        local cleaned = tostring(clip):gsub("^%s+", ""):gsub("%s+$", "")
+        keyInput.Text = cleaned
+        statusLabel.Text = "Đã dán key thành công."
+        showToast("ANDZ đã dán dữ liệu từ bảng nhớ tạm của bạn")
+    else
+        statusLabel.Text = "Không đọc được bảng nhớ tạm hoặc đang trống."
+        showToast("Không thể dán tự động, hãy dán thủ công vào ô nhập")
+    end
+end)
+
+saveKeyBtn.MouseButton1Click:Connect(function()
+    local k = keyInput.Text:gsub("%s+", "")
+    if k == "" then
+        statusLabel.Text = "Vui lòng nhập key trước khi lưu."
+        showToast("Chưa có key để lưu")
+        return
+    end
+    saveKeyToFile(k)
+    statusLabel.Text = "Đã lưu key thành công."
+    showToast("ANDZ đã lưu key của bạn")
+end)
+
+local checking = false
+loginBtn.MouseButton1Click:Connect(function()
+    if checking then return end
+    local k = keyInput.Text:gsub("%s+", "")
+    if k == "" then
+        statusLabel.Text = "Vui lòng nhập key kích hoạt."
+        showToast("Key không được để trống")
+        return
+    end
+
+    checking = true
+    loginBtn.Text = "ĐANG KIỂM TRA..."
+    statusLabel.Text = "Đang kết nối tới máy chủ xác thực..."
+
+    task.spawn(function()
+        local hwid = getHWID()
+        local sep = API_URL:find("?", 1, true) and "&" or "?"
+        local fullUrl = API_URL .. sep .. "key=" .. urlEncode(k) .. "&hwid=" .. urlEncode(hwid)
+
+        local ok, body = httpRequestGet(fullUrl)
+        checking = false
+        loginBtn.Text = "ĐĂNG NHẬP"
+
+        if not ok then
+            statusLabel.Text = body
+            showToast("Lỗi kết nối API")
+            return
+        end
+
+        local lowerBody = body:lower()
+        local isValid = lowerBody:find('"valid"%s*:%s*true')
+            or lowerBody:find('"status"%s*:%s*"success"')
+            or lowerBody:find('"success"%s*:%s*true')
+            or (body:gsub("%s+", ""):lower() == "valid")
+            or (body:gsub("%s+", ""):lower() == "success")
+
+        if isValid then
+            keyInfoState.Key = k
+            keyInfoState.Expires = extractExpiryFromBody(body)
+            saveKeyToFile(k)
+            statusLabel.Text = "Xác thực thành công! Đang mở menu..."
+            showToast("Đăng nhập thành công")
+            task.wait(0.6)
+            screenGui:Destroy()
+            openMainHub()
+        else
+            local msg = body:match('"message"%s*:%s*"([^"]+)"')
+                or body:match('"msg"%s*:%s*"([^"]+)"')
+                or "Key không hợp lệ hoặc đã hết hạn."
+            statusLabel.Text = msg
+            showToast(msg)
+        end
+    end)
+end)
