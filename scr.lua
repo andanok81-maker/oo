@@ -66,7 +66,7 @@ local redzlib = {
 }
 
 local okIcons, loadedIcons = pcall(function()
-  return loadstring(game:HttpGet("https://raw.githubusercontent.com/andanok81-maker/oo/refs/heads/main/icon"))()
+  return loadstring(game:HttpGet("https://raw.githubusercontent.com/andanok81-maker/oo/refs/heads/main/icon.lua"))()
 end)
 if okIcons and type(loadedIcons) == "table" then
   redzlib.Icons = loadedIcons
