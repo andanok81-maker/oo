@@ -62,14 +62,30 @@ local redzlib = {
   Options = {},
   Flags = {},
   Tabs = {},
-  Icons = loadstring(game:HttpGet("https://raw.githubusercontent.com/andanok81-maker/oo/refs/heads/main/icon"))()
+  Icons = {}
 }
+
+local okIcons, loadedIcons = pcall(function()
+  return loadstring(game:HttpGet("https://raw.githubusercontent.com/andanok81-maker/oo/refs/heads/main/icon"))()
+end)
+if okIcons and type(loadedIcons) == "table" then
+  redzlib.Icons = loadedIcons
+end
 
 local ViewportSize = workspace.CurrentCamera.ViewportSize
 local UIScale = ViewportSize.Y / 450
 
 local Settings = redzlib.Settings
 local Flags = redzlib.Flags
+
+local function VerifyTheme(Theme)
+  for name in pairs(redzlib.Themes) do
+    if name == Theme then
+      return true
+    end
+  end
+  return false
+end
 
 local SetProps, SetChildren, InsertTheme, Create do
   InsertTheme = function(Instance, Type)
@@ -82,46 +98,45 @@ local SetProps, SetChildren, InsertTheme, Create do
   
   SetChildren = function(Instance, Children)
     if Children then
-      table.foreach(Children, function(_,Child)
+      for _, Child in ipairs(Children) do
         Child.Parent = Instance
-      end)
+      end
     end
     return Instance
   end
   
   SetProps = function(Instance, Props)
     if Props then
-      table.foreach(Props, function(prop, value)
+      for prop, value in pairs(Props) do
         Instance[prop] = value
-      end)
+      end
     end
     return Instance
   end
   
   Create = function(...)
     local args = {...}
-    if type(args) ~= "table" then return end
+    if type(args[1]) ~= "string" then return end
     local new = Instance.new(args[1])
-    local Children = {}
     
     if type(args[2]) == "table" then
       SetProps(new, args[2])
       SetChildren(new, args[3])
-      Children = args[3] or {}
     elseif typeof(args[2]) == "Instance" then
       new.Parent = args[2]
       SetProps(new, args[3])
       SetChildren(new, args[4])
-      Children = args[4] or {}
     end
     return new
   end
   
   local function Save(file)
     if readfile and isfile and isfile(file) then
-      local decode = HttpService:JSONDecode(readfile(file))
+      local ok, decode = pcall(function()
+        return HttpService:JSONDecode(readfile(file))
+      end)
       
-      if type(decode) == "table" then
+      if ok and type(decode) == "table" then
         if rawget(decode, "UISize") then redzlib.Save["UISize"] = decode["UISize"] end
         if rawget(decode, "TabSize") then redzlib.Save["TabSize"] = decode["TabSize"] end
         if rawget(decode, "Theme") and VerifyTheme(decode["Theme"]) then redzlib.Save["Theme"] = decode["Theme"] end
@@ -141,7 +156,7 @@ local Funcs = {} do
   end
   
   function Funcs:FireCallback(tab, ...)
-    for _,v in ipairs(tab) do
+    for _, v in ipairs(tab) do
       if type(v) == "function" then
         task.spawn(v, ...)
       end
@@ -152,11 +167,11 @@ local Funcs = {} do
     Obj.Visible = Bool ~= nil and Bool or Obj.Visible
   end
   
-  function Funcs:ToggleParent(Obj, Parent)
+  function Funcs:ToggleParent(Obj, Parent, Bool)
     if Bool ~= nil then
-      Obj.Parent = Bool
+      Obj.Parent = Bool and Parent or nil
     else
-      Obj.Parent = not Obj.Parent and Parent
+      Obj.Parent = not Obj.Parent and Parent or nil
     end
   end
   
@@ -165,7 +180,8 @@ local Funcs = {} do
     
     function Connected:Disconnect()
       if self.Connected then
-        table.remove(ConnectedFuncs, table.find(ConnectedFuncs, self.Function))
+        local idx = table.find(ConnectedFuncs, self.Function)
+        if idx then table.remove(ConnectedFuncs, idx) end
         self.Connected = false
       end
     end
@@ -180,10 +196,10 @@ local Funcs = {} do
   end
   
   function Funcs:GetCallback(Configs, index)
-    local func = Configs[index] or Configs.Callback or function()end
+    local func = Configs[index] or Configs.Callback or function() end
     
     if type(func) == "table" then
-      return ({function(Value) func[1][func[2]] = Value end})
+      return {function(Value) func[1][func[2]] = Value end}
     end
     return {func}
   end
@@ -193,7 +209,7 @@ local Connections, Connection = {}, redzlib.Connection do
   local function NewConnectionList(List)
     if type(List) ~= "table" then return end
     
-    for _,CoName in ipairs(List) do
+    for _, CoName in ipairs(List) do
       local ConnectedFuncs, Connect = {}, {}
       Connection[CoName] = Connect
       Connections[CoName] = ConnectedFuncs
@@ -208,11 +224,11 @@ local Connections, Connection = {}, redzlib.Connection do
       
       function Connect:Once(func)
         if type(func) == "function" then
-          local Connected;
-          
-          local _NFunc;_NFunc = function(...)
+          local Connected
+          local _NFunc
+          _NFunc = function(...)
             task.spawn(func, ...)
-            Connected:Disconnect()
+            if Connected then Connected:Disconnect() end
           end
           
           Connected = Funcs:GetConnectionFunctions(ConnectedFuncs, _NFunc)
@@ -223,8 +239,9 @@ local Connections, Connection = {}, redzlib.Connection do
   end
   
   function Connection:FireConnection(CoName, ...)
-    local Connection = type(CoName) == "string" and Connections[CoName] or Connections[CoName.Name]
-    for _,Func in pairs(Connection) do
+    local list = type(CoName) == "string" and Connections[CoName] or Connections[CoName.Name]
+    if not list then return end
+    for _, Func in pairs(list) do
       task.spawn(Func, ...)
     end
   end
@@ -252,17 +269,17 @@ local GetFlag, SetFlag, CheckFlag do
   Connection.FlagsChanged:Connect(function(Flag, Value)
     local ScriptFile = Settings.ScriptFile
     if not db and ScriptFile and writefile then
-      db=true;task.wait(0.1);db=false
+      db = true
+      task.wait(0.1)
+      db = false
       
       local Success, Encoded = pcall(function()
-        -- local _Flags = {}
-        -- for _,Flag in pairs(Flags) do _Flags[_] = Flag.Value end
         return HttpService:JSONEncode(Flags)
       end)
       
       if Success then
-        local Success = pcall(writefile, ScriptFile, Encoded)
-        if Success then
+        local okWrite = pcall(writefile, ScriptFile, Encoded)
+        if okWrite then
           Connection:FireConnection("FileSaved", "Script-Flags", ScriptFile, Encoded)
         end
       end
@@ -272,6 +289,7 @@ end
 
 local ScreenGui = Create("ScreenGui", CoreGui, {
   Name = "redz Library V5",
+  ResetOnSpawn = false
 }, {
   Create("UIScale", {
     Scale = UIScale,
@@ -279,9 +297,10 @@ local ScreenGui = Create("ScreenGui", CoreGui, {
   })
 })
 
-local ScreenFind = CoreGui:FindFirstChild(ScreenGui.Name)
-if ScreenFind and ScreenFind ~= ScreenGui then
-  ScreenFind:Destroy()
+for _, child in ipairs(CoreGui:GetChildren()) do
+  if child.Name == ScreenGui.Name and child ~= ScreenGui then
+    child:Destroy()
+  end
 end
 
 local function GetStr(val)
@@ -294,10 +313,11 @@ end
 local function ConnectSave(Instance, func)
   Instance.InputBegan:Connect(function(Input)
     if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-      while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do task.wait()
+      while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+        task.wait()
       end
+      func()
     end
-    func()
   end)
 end
 
@@ -307,9 +327,9 @@ local function CreateTween(Configs)
   local NewVal = Configs[3] or Configs.NewVal
   local Time = Configs[4] or Configs.Time or 0.5
   local TweenWait = Configs[5] or Configs.wait or false
-  local TweenInfo = TweenInfo.new(Time, Enum.EasingStyle.Quint)
+  local info = TweenInfo.new(Time, Enum.EasingStyle.Quint)
   
-  local Tween = TweenService:Create(Instance, TweenInfo, {[Prop] = NewVal})
+  local Tween = TweenService:Create(Instance, info, {[Prop] = NewVal})
   Tween:Play()
   if TweenWait then
     Tween.Completed:Wait()
@@ -324,25 +344,30 @@ local function MakeDrag(Instance)
       AutoButtonColor = false
     })
     
-		local DragStart, StartPos, InputOn
-		
-		local function Update(Input)
-			local delta = Input.Position - DragStart
-			local Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + delta.X / UIScale, StartPos.Y.Scale, StartPos.Y.Offset + delta.Y / UIScale)
-			-- Instance.Position = Position
-			CreateTween({Instance, "Position", Position, 0.35})
-		end
-		
-		Instance.MouseButton1Down:Connect(function()
-		  InputOn = true
-		end)
-		
+    local DragStart, StartPos, InputOn
+    
+    local function Update(Input)
+      local delta = Input.Position - DragStart
+      local Position = UDim2.new(
+        StartPos.X.Scale,
+        StartPos.X.Offset + delta.X / UIScale,
+        StartPos.Y.Scale,
+        StartPos.Y.Offset + delta.Y / UIScale
+      )
+      CreateTween({Instance, "Position", Position, 0.35})
+    end
+    
+    Instance.MouseButton1Down:Connect(function()
+      InputOn = true
+    end)
+    
     Instance.InputBegan:Connect(function(Input)
       if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
         StartPos = Instance.Position
         DragStart = Input.Position
         
-        while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do RunService.Heartbeat:Wait()
+        while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+          RunService.Heartbeat:Wait()
           if InputOn then
             Update(Input)
           end
@@ -350,16 +375,8 @@ local function MakeDrag(Instance)
         InputOn = false
       end
     end)
-	end)
-	return Instance
-end
-
-local function VerifyTheme(Theme)
-  for name,_ in pairs(redzlib.Themes) do
-    if name == Theme then
-      return true
-    end
-  end
+  end)
+  return Instance
 end
 
 local function SaveJson(FileName, save)
@@ -369,7 +386,7 @@ local function SaveJson(FileName, save)
   end
 end
 
-local Theme = redzlib.Themes[redzlib.Save.Theme]
+local Theme = redzlib.Themes[redzlib.Save.Theme] or redzlib.Themes.Darker
 
 local function AddEle(Name, Func)
   redzlib.Elements[Name] = Func
@@ -381,20 +398,18 @@ local function Make(Ele, Instance, props, ...)
 end
 
 AddEle("Corner", function(parent, CornerRadius)
-  local New = SetProps(Create("UICorner", parent, {
+  return Create("UICorner", parent, {
     CornerRadius = CornerRadius or UDim.new(0, 7)
-  }), props)
-  return New
+  })
 end)
 
 AddEle("Stroke", function(parent, props, ...)
   local args = {...}
-  local New = InsertTheme(SetProps(Create("UIStroke", parent, {
+  return InsertTheme(SetProps(Create("UIStroke", parent, {
     Color = args[1] or Theme["Color Stroke"],
     Thickness = args[2] or 1,
     ApplyStrokeMode = "Border"
   }), props), "Stroke")
-  return New
 end)
 
 AddEle("Button", function(parent, props, ...)
@@ -419,11 +434,9 @@ AddEle("Button", function(parent, props, ...)
 end)
 
 AddEle("Gradient", function(parent, props, ...)
-  local args = {...}
-  local New = InsertTheme(SetProps(Create("UIGradient", parent, {
+  return InsertTheme(SetProps(Create("UIGradient", parent, {
     Color = Theme["Color Hub 1"]
   }), props), "Gradient")
-  return New
 end)
 
 local function ButtonFrame(Instance, Title, Description, HolderSize)
@@ -460,27 +473,28 @@ local function ButtonFrame(Instance, Title, Description, HolderSize)
     Size = UDim2.new(1, 0, 0, 25),
     AutomaticSize = "Y",
     Name = "Option"
-  })Make("Corner", Frame, UDim.new(0, 6))
+  })
+  Make("Corner", Frame, UDim.new(0, 6))
   
-	LabelHolder = Create("Frame", Frame, {
-		AutomaticSize = "Y",
-		BackgroundTransparency = 1,
-		Size = HolderSize,
-		Position = UDim2.new(0, 10, 0),
-		AnchorPoint = Vector2.new(0, 0)
-	}, {
-		Create("UIListLayout", {
-			SortOrder = "LayoutOrder",
-			VerticalAlignment = "Center",
-			Padding = UDim.new(0, 2)
-		}),
-		Create("UIPadding", {
-			PaddingBottom = UDim.new(0, 5),
-			PaddingTop = UDim.new(0, 5)
-		}),
-		TitleL,
-		DescL,
-	})
+  local LabelHolder = Create("Frame", Frame, {
+    AutomaticSize = "Y",
+    BackgroundTransparency = 1,
+    Size = HolderSize,
+    Position = UDim2.new(0, 10, 0),
+    AnchorPoint = Vector2.new(0, 0)
+  }, {
+    Create("UIListLayout", {
+      SortOrder = "LayoutOrder",
+      VerticalAlignment = "Center",
+      Padding = UDim.new(0, 2)
+    }),
+    Create("UIPadding", {
+      PaddingBottom = UDim.new(0, 5),
+      PaddingTop = UDim.new(0, 5)
+    }),
+    TitleL,
+    DescL,
+  })
   
   local Label = {}
   function Label:SetTitle(NewTitle)
@@ -522,21 +536,21 @@ local function GetColor(Instance)
   return ""
 end
 
--- /////////// --
 function redzlib:GetIcon(IconName)
+  if type(IconName) ~= "string" then return "" end
   if IconName:find("rbxassetid://") or IconName:len() < 1 then return IconName end
   IconName = IconName:lower():gsub("lucide", ""):gsub("-", "")
   
-  for Name, Icon in pairs(redzlib.Icons) do
-    Name = Name:gsub("lucide", ""):gsub("-", "")
+  for Name, Icon in pairs(redzlib.Icons or {}) do
+    Name = tostring(Name):gsub("lucide", ""):gsub("-", "")
     if Name == IconName then
-      return Icon
+      return tostring(Icon)
     end
   end
-  for Name, Icon in pairs(redzlib.Icons) do
-    Name = Name:gsub("lucide", ""):gsub("-", "")
+  for Name, Icon in pairs(redzlib.Icons or {}) do
+    Name = tostring(Name):gsub("lucide", ""):gsub("-", "")
     if Name:find(IconName) then
-      return Icon
+      return tostring(Icon)
     end
   end
   return IconName
@@ -549,24 +563,25 @@ function redzlib:SetTheme(NewTheme)
   SaveJson("redz library V5.json", redzlib.Save)
   Theme = redzlib.Themes[NewTheme]
   
-  Comnection:FireConnection("ThemeChanged", NewTheme)
-  table.foreach(redzlib.Instances, function(_,Val)
+  Connection:FireConnection("ThemeChanged", NewTheme)
+  for _, Val in ipairs(redzlib.Instances) do
+    local prop = GetColor(Val.Instance)
     if Val.Type == "Gradient" then
       Val.Instance.Color = Theme["Color Hub 1"]
     elseif Val.Type == "Frame" then
       Val.Instance.BackgroundColor3 = Theme["Color Hub 2"]
-    elseif Val.Type == "Stroke" then
-      Val.Instance[GetColor(Val.Instance)] = Theme["Color Stroke"]
-    elseif Val.Type == "Theme" then
-      Val.Instance[GetColor(Val.Instance)] = Theme["Color Theme"]
-    elseif Val.Type == "Text" then
-      Val.Instance[GetColor(Val.Instance)] = Theme["Color Text"]
-    elseif Val.Type == "DarkText" then
-      Val.Instance[GetColor(Val.Instance)] = Theme["Color Dark Text"]
-    elseif Val.Type == "ScrollBar" then
-      Val.Instance[GetColor(Val.Instance)] = Theme["Color Theme"]
+    elseif Val.Type == "Stroke" and prop ~= "" then
+      Val.Instance[prop] = Theme["Color Stroke"]
+    elseif Val.Type == "Theme" and prop ~= "" then
+      Val.Instance[prop] = Theme["Color Theme"]
+    elseif Val.Type == "Text" and prop ~= "" then
+      Val.Instance[prop] = Theme["Color Text"]
+    elseif Val.Type == "DarkText" and prop ~= "" then
+      Val.Instance[prop] = Theme["Color Dark Text"]
+    elseif Val.Type == "ScrollBar" and prop ~= "" then
+      Val.Instance[prop] = Theme["Color Theme"]
     end
-  end)
+  end
 end
 
 function redzlib:SetScale(NewScale)
@@ -575,6 +590,7 @@ function redzlib:SetScale(NewScale)
 end
 
 function redzlib:MakeWindow(Configs)
+  Configs = Configs or {}
   local WTitle = Configs[1] or Configs.Name or Configs.Title or "redz Library V5"
   local WMiniText = Configs[2] or Configs.SubTitle or "by : redz9999"
   
@@ -587,14 +603,16 @@ function redzlib:MakeWindow(Configs)
     local s, r = pcall(isfile, File)
     
     if s and r then
-      local s, _Flags = pcall(readfile, File)
-      
-      if s and type(_Flags) == "string" then
-        local s,r = pcall(function() return HttpService:JSONDecode(_Flags) end)
-        Flags = s and r or {}
+      local s2, _Flags = pcall(readfile, File)
+      if s2 and type(_Flags) == "string" then
+        local s3, decoded = pcall(function() return HttpService:JSONDecode(_Flags) end)
+        if s3 and type(decoded) == "table" then
+          Flags = decoded
+        end
       end
     end
-  end;LoadFile()
+  end
+  LoadFile()
   
   local UISizeX, UISizeY = unpack(redzlib.Save.UISize)
   local MainFrame = InsertTheme(Create("ImageButton", ScreenGui, {
@@ -603,19 +621,13 @@ function redzlib:MakeWindow(Configs)
     BackgroundTransparency = 0.03,
     Name = "Hub"
   }), "Main")
-  Make("Gradient", MainFrame, {
-    Rotation = 45
-  })MakeDrag(MainFrame)
+  Make("Gradient", MainFrame, { Rotation = 45 })
+  MakeDrag(MainFrame)
   
   local MainCorner = Make("Corner", MainFrame)
   
-  local Components = Create("Folder", MainFrame, {
-    Name = "Components"
-  })
-  
-  local DropdownHolder = Create("Folder", ScreenGui, {
-    Name = "Dropdown"
-  })
+  local Components = Create("Folder", MainFrame, { Name = "Components" })
+  local DropdownHolder = Create("Folder", ScreenGui, { Name = "Dropdown" })
   
   local TopBar = Create("Frame", Components, {
     Size = UDim2.new(1, 0, 0, 28),
@@ -670,7 +682,8 @@ function redzlib:MakeWindow(Configs)
       PaddingRight = UDim.new(0, 10),
       PaddingTop = UDim.new(0, 10),
       PaddingBottom = UDim.new(0, 10)
-    }), Create("UIListLayout", {
+    }),
+    Create("UIListLayout", {
       Padding = UDim.new(0, 5)
     })
   }), "ScrollBar")
@@ -683,6 +696,8 @@ function redzlib:MakeWindow(Configs)
     ClipsDescendants = true,
     Name = "Containers"
   })
+  
+  local Minimized, SaveSize, WaitClick = false, nil, false
   
   local ControlSize1, ControlSize2 = MakeDrag(Create("ImageButton", MainFrame, {
     Size = UDim2.new(0, 35, 0, 35),
@@ -725,9 +740,7 @@ function redzlib:MakeWindow(Configs)
     SaveJson("redz library V5.json", redzlib.Save)
   end)
   
-  local ButtonsFolder = Create("Folder", TopBar, {
-    Name = "Buttons"
-  })
+  local ButtonsFolder = Create("Folder", TopBar, { Name = "Buttons" })
   
   local CloseButton = Create("ImageButton", {
     Size = UDim2.new(0, 14, 0, 14),
@@ -745,21 +758,15 @@ function redzlib:MakeWindow(Configs)
     Name = "Minimize"
   })
   
-  SetChildren(ButtonsFolder, {
-    CloseButton,
-    MinimizeButton
-  })
+  SetChildren(ButtonsFolder, { CloseButton, MinimizeButton })
   
-  local Minimized, SaveSize, WaitClick
   local Window, FirstTab = {}, false
   function Window:CloseBtn()
-    local Dialog = Window:Dialog({
+    Window:Dialog({
       Title = "Close",
       Text = "Are you sure you want to close this script??",
       Options = {
-        {"Confirm", function()
-          ScreenGui:Destroy()
-        end},
+        {"Confirm", function() ScreenGui:Destroy() end},
         {"Cancel"}
       }
     })
@@ -789,6 +796,7 @@ function redzlib:MakeWindow(Configs)
     MainFrame.Visible = not MainFrame.Visible
   end
   function Window:AddMinimizeButton(Configs)
+    Configs = Configs or {}
     local Button = MakeDrag(Create("ImageButton", ScreenGui, {
       Size = UDim2.fromOffset(35, 35),
       Position = UDim2.fromScale(0.15, 0.15),
@@ -804,17 +812,15 @@ function redzlib:MakeWindow(Configs)
     end
     if Configs.Stroke then
       Stroke = Make("Stroke", Button)
-      SetProps(Stroke, Configs.Corner)
+      SetProps(Stroke, Configs.Stroke)
     end
     
-    SetProps(Button, Configs.Button)
+    if Configs.Button then
+      SetProps(Button, Configs.Button)
+    end
     Button.Activated:Connect(Window.Minimize)
     
-    return {
-      Stroke = Stroke,
-      Corner = Corner,
-      Button = Button
-    }
+    return { Stroke = Stroke, Corner = Corner, Button = Button }
   end
   function Window:Set(Val1, Val2)
     if type(Val1) == "string" and type(Val2) == "string" then
@@ -826,10 +832,9 @@ function redzlib:MakeWindow(Configs)
   end
   function Window:Dialog(Configs)
     if MainFrame:FindFirstChild("Dialog") then return end
-    if Minimized then
-      Window:MinimizeBtn()
-    end
+    if Minimized then Window:MinimizeBtn() end
     
+    Configs = Configs or {}
     local DTitle = Configs[1] or Configs.Title or "Dialog"
     local DText = Configs[2] or Configs.Text or "This is a Dialog"
     local DOptions = Configs[3] or Configs.Options or {}
@@ -862,7 +867,9 @@ function redzlib:MakeWindow(Configs)
         BackgroundTransparency = 1,
         TextWrapped = true
       }), "DarkText")
-    })Make("Gradient", Frame, {Rotation = 270})Make("Corner", Frame)
+    })
+    Make("Gradient", Frame, {Rotation = 270})
+    Make("Corner", Frame)
     
     local ButtonsHolder = Create("Frame", Frame, {
       Size = UDim2.fromScale(1, 0.35),
@@ -873,16 +880,15 @@ function redzlib:MakeWindow(Configs)
     }, {
       Create("UIListLayout", {
         Padding = UDim.new(0, 10),
-			  VerticalAlignment = "Center",
-			  FillDirection = "Horizontal",
-			  HorizontalAlignment = "Center"
+        VerticalAlignment = "Center",
+        FillDirection = "Horizontal",
+        HorizontalAlignment = "Center"
       })
     })
     
     local Screen = InsertTheme(Create("Frame", MainFrame, {
       BackgroundTransparency = 0.6,
       Active = true,
-      BackgroundColor3 = Theme["Color Hub 2"],
       Size = UDim2.new(1, 0, 1, 0),
       BackgroundColor3 = Theme["Color Stroke"],
       Name = "Dialog"
@@ -895,9 +901,10 @@ function redzlib:MakeWindow(Configs)
     CreateTween({Screen, "Transparency", 0.3, 0.15})
     
     local ButtonCount, Dialog = 1, {}
-    function Dialog:Button(Configs)
-      local Name = Configs[1] or Configs.Name or Configs.Title or ""
-      local Callback = Configs[2] or Configs.Callback or function()end
+    function Dialog:Button(BtnCfg)
+      BtnCfg = BtnCfg or {}
+      local Name = BtnCfg[1] or BtnCfg.Name or BtnCfg.Title or ""
+      local Callback = BtnCfg[2] or BtnCfg.Callback or function() end
       
       ButtonCount = ButtonCount + 1
       local Button = Make("Button", ButtonsHolder)
@@ -909,9 +916,9 @@ function redzlib:MakeWindow(Configs)
         TextSize = 12
       })
       
-      for _,Button in pairs(ButtonsHolder:GetChildren()) do
-        if Button:IsA("TextButton") then
-          Button.Size = UDim2.new(1 / ButtonCount, -(((ButtonCount - 1) * 20) / ButtonCount), 0, 32) -- Fluent Library :)
+      for _, b in pairs(ButtonsHolder:GetChildren()) do
+        if b:IsA("TextButton") then
+          b.Size = UDim2.new(1 / ButtonCount, -(((ButtonCount - 1) * 20) / ButtonCount), 0, 32)
         end
       end
       Button.Activated:Connect(Dialog.Close)
@@ -923,16 +930,16 @@ function redzlib:MakeWindow(Configs)
       CreateTween({Frame, "Transparency", 1, 0.15, true})
       Screen:Destroy()
     end
-    table.foreach(DOptions, function(_,Button)
-      Dialog:Button(Button)
-    end)
+    for _, b in ipairs(DOptions) do
+      Dialog:Button(b)
+    end
     return Dialog
   end
   function Window:SelectTab(TabSelect)
-    if type(TabSelect) == "number" then
+    if type(TabSelect) == "number" and redzlib.Tabs[TabSelect] then
       redzlib.Tabs[TabSelect].func:Enable()
-    else
-      for _,Tab in pairs(redzlib.Tabs) do
+    elseif type(TabSelect) == "table" and TabSelect.Cont then
+      for _, Tab in pairs(redzlib.Tabs) do
         if Tab.Cont == TabSelect.Cont then
           Tab.func:Enable()
         end
@@ -943,17 +950,16 @@ function redzlib:MakeWindow(Configs)
   local ContainerList = {}
   function Window:MakeTab(paste, Configs)
     if type(paste) == "table" then Configs = paste end
+    Configs = Configs or {}
     local TName = Configs[1] or Configs.Title or "Tab!"
-    local TIcon = Configs[2] or Configs.Icon or ""
+    local TIcon = tostring(redzlib:GetIcon(Configs[2] or Configs.Icon or "") or "")
     
-    TIcon = redzlib:GetIcon(TIcon)
     if not TIcon:find("rbxassetid://") or TIcon:gsub("rbxassetid://", ""):len() < 6 then
       TIcon = false
     end
     
-    local TabSelect = Make("Button", MainScroll, {
-      Size = UDim2.new(1, 0, 0, 24)
-    })Make("Corner", TabSelect)
+    local TabSelect = Make("Button", MainScroll, { Size = UDim2.new(1, 0, 0, 24) })
+    Make("Corner", TabSelect)
     
     local LabelTitle = InsertTheme(Create("TextLabel", TabSelect, {
       Size = UDim2.new(1, TIcon and -25 or -15, 1),
@@ -983,7 +989,8 @@ function redzlib:MakeWindow(Configs)
       AnchorPoint = Vector2.new(0, 0.5),
       BackgroundColor3 = Theme["Color Theme"],
       BackgroundTransparency = FirstTab and 1 or 0
-    }), "Theme")Make("Corner", Selected, UDim.new(0.5, 0))
+    }), "Theme")
+    Make("Corner", Selected, UDim.new(0.5, 0))
     
     local Container = InsertTheme(Create("ScrollingFrame", {
       Size = UDim2.new(1, 0, 1, 0),
@@ -1004,29 +1011,29 @@ function redzlib:MakeWindow(Configs)
         PaddingRight = UDim.new(0, 10),
         PaddingTop = UDim.new(0, 10),
         PaddingBottom = UDim.new(0, 10)
-      }), Create("UIListLayout", {
+      }),
+      Create("UIListLayout", {
         Padding = UDim.new(0, 5)
       })
     }), "ScrollBar")
     
     table.insert(ContainerList, Container)
-    
     if not FirstTab then Container.Parent = Containers end
     
     local function Tabs()
       if Container.Parent then return end
-      for _,Frame in pairs(ContainerList) do
+      for _, Frame in pairs(ContainerList) do
         if Frame:IsA("ScrollingFrame") and Frame ~= Container then
           Frame.Parent = nil
         end
       end
       Container.Parent = Containers
       Container.Size = UDim2.new(1, 0, 1, 150)
-      table.foreach(redzlib.Tabs, function(_,Tab)
-        if Tab.Cont ~= Container then
-          Tab.func:Disable()
+      for _, TabItem in pairs(redzlib.Tabs) do
+        if TabItem.Cont ~= Container then
+          TabItem.func:Disable()
         end
-      end)
+      end
       CreateTween({Container, "Size", UDim2.new(1, 0, 1, 0), 0.3})
       CreateTween({LabelTitle, "TextTransparency", 0, 0.35})
       CreateTween({LabelIcon, "ImageTransparency", 0, 0.35})
@@ -1047,24 +1054,20 @@ function redzlib:MakeWindow(Configs)
       CreateTween({Selected, "Size", UDim2.new(0, 4, 0, 4), 0.35})
       CreateTween({Selected, "BackgroundTransparency", 1, 0.35})
     end
-    function Tab:Enable()
-      Tabs()
-    end
+    function Tab:Enable() Tabs() end
     function Tab:Visible(Bool)
       Funcs:ToggleVisible(TabSelect, Bool)
-      Funcs:ToggleParent(Container, Bool, Containers)
+      Funcs:ToggleParent(Container, Containers, Bool)
     end
     function Tab:Destroy() TabSelect:Destroy() Container:Destroy() end
     
-    function Tab:AddSection(Configs)
-      local SectionName = type(Configs) == "string" and Configs or Configs[1] or Configs.Name or Configs.Title or Configs.Section
-      
+    function Tab:AddSection(Cfg)
+      local SectionName = type(Cfg) == "string" and Cfg or Cfg[1] or Cfg.Name or Cfg.Title or Cfg.Section or "Section"
       local SectionFrame = Create("Frame", Container, {
         Size = UDim2.new(1, 0, 0, 20),
         BackgroundTransparency = 1,
         Name = "Option"
       })
-      
       local SectionLabel = InsertTheme(Create("TextLabel", SectionFrame, {
         Font = Enum.Font.GothamBold,
         Text = SectionName,
@@ -1080,34 +1083,21 @@ function redzlib:MakeWindow(Configs)
       local Section = {}
       table.insert(redzlib.Options, {type = "Section", Name = SectionName, func = Section})
       function Section:Visible(Bool)
-        if Bool == nil then SectionFrame.Visible = not SectionFrame.Visible return end
-        SectionFrame.Visible = Bool
+        SectionFrame.Visible = (Bool == nil) and (not SectionFrame.Visible) or Bool
       end
-      function Section:Destroy()
-        SectionFrame:Destroy()
-      end
-      function Section:Set(New)
-        if New then
-          SectionLabel.Text = GetStr(New)
-        end
-      end
+      function Section:Destroy() SectionFrame:Destroy() end
+      function Section:Set(New) if New then SectionLabel.Text = GetStr(New) end end
       return Section
     end
-    function Tab:AddParagraph(Configs)
-      local PName = Configs[1] or Configs.Title or "Paragraph"
-      local PDesc = Configs[2] or Configs.Text or ""
-      
-      local Frame, LabelFunc = ButtonFrame(Container, PName, PDesc, UDim2.new(1, -20))
-      
+    
+    function Tab:AddParagraph(Cfg)
+      Cfg = Cfg or {}
+      local Frame, LabelFunc = ButtonFrame(Container, Cfg[1] or Cfg.Title or "Paragraph", Cfg[2] or Cfg.Text or "", UDim2.new(1, -20))
       local Paragraph = {}
       function Paragraph:Visible(...) Funcs:ToggleVisible(Frame, ...) end
       function Paragraph:Destroy() Frame:Destroy() end
-      function Paragraph:SetTitle(Val)
-        LabelFunc:SetTitle(GetStr(Val))
-      end
-      function Paragraph:SetDesc(Val)
-        LabelFunc:SetDesc(GetStr(Val))
-      end
+      function Paragraph:SetTitle(Val) LabelFunc:SetTitle(GetStr(Val)) end
+      function Paragraph:SetDesc(Val) LabelFunc:SetDesc(GetStr(Val)) end
       function Paragraph:Set(Val1, Val2)
         if Val1 and Val2 then
           LabelFunc:SetTitle(GetStr(Val1))
@@ -1118,14 +1108,15 @@ function redzlib:MakeWindow(Configs)
       end
       return Paragraph
     end
-    function Tab:AddButton(Configs)
-      local BName = Configs[1] or Configs.Name or Configs.Title or "Button!"
-      local BDescription = Configs.Desc or Configs.Description or ""
-      local Callback = Funcs:GetCallback(Configs, 2)
+    
+    function Tab:AddButton(Cfg)
+      Cfg = Cfg or {}
+      local BName = Cfg[1] or Cfg.Name or Cfg.Title or "Button!"
+      local BDescription = Cfg.Desc or Cfg.Description or ""
+      local Callback = Funcs:GetCallback(Cfg, 2)
       
       local FButton, LabelFunc = ButtonFrame(Container, BName, BDescription, UDim2.new(1, -20))
-      
-      local ButtonIcon = Create("ImageLabel", FButton, {
+      Create("ImageLabel", FButton, {
         Size = UDim2.new(0, 14, 0, 14),
         Position = UDim2.new(1, -10, 0.5),
         AnchorPoint = Vector2.new(1, 0.5),
@@ -1133,9 +1124,7 @@ function redzlib:MakeWindow(Configs)
         Image = "rbxassetid://10709791437"
       })
       
-      FButton.Activated:Connect(function()
-        Funcs:FireCallback(Callback)
-      end)
+      FButton.Activated:Connect(function() Funcs:FireCallback(Callback) end)
       
       local Button = {}
       function Button:Visible(...) Funcs:ToggleVisible(FButton, ...) end
@@ -1148,17 +1137,19 @@ function redzlib:MakeWindow(Configs)
         elseif type(Val1) == "string" then
           LabelFunc:SetTitle(Val1)
         elseif type(Val1) == "function" then
-          Callback = Val1
+          Callback = {Val1}
         end
       end
       return Button
     end
-    function Tab:AddToggle(Configs)
-      local TName = Configs[1] or Configs.Name or Configs.Title or "Toggle"
-      local TDesc = Configs.Desc or Configs.Description or ""
-      local Callback = Funcs:GetCallback(Configs, 3)
-      local Flag = Configs[4] or Configs.Flag or false
-      local Default = Configs[2] or Configs.Default or false
+    
+    function Tab:AddToggle(Cfg)
+      Cfg = Cfg or {}
+      local TName = Cfg[1] or Cfg.Name or Cfg.Title or "Toggle"
+      local TDesc = Cfg.Desc or Cfg.Description or ""
+      local Callback = Funcs:GetCallback(Cfg, 3)
+      local Flag = Cfg[4] or Cfg.Flag or false
+      local Default = Cfg[2] or Cfg.Default or false
       if CheckFlag(Flag) then Default = GetFlag(Flag) end
       
       local Button, LabelFunc = ButtonFrame(Container, TName, TDesc, UDim2.new(1, -38))
@@ -1168,7 +1159,8 @@ function redzlib:MakeWindow(Configs)
         Position = UDim2.new(1, -10, 0.5),
         AnchorPoint = Vector2.new(1, 0.5),
         BackgroundColor3 = Theme["Color Stroke"]
-      }), "Stroke")Make("Corner", ToggleHolder, UDim.new(0.5, 0))
+      }), "Stroke")
+      Make("Corner", ToggleHolder, UDim.new(0.5, 0))
       
       local Slider = Create("Frame", ToggleHolder, {
         BackgroundTransparency = 1,
@@ -1182,69 +1174,68 @@ function redzlib:MakeWindow(Configs)
         Position = UDim2.new(0, 0, 0.5),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundColor3 = Theme["Color Theme"]
-      }), "Theme")Make("Corner", Toggle, UDim.new(0.5, 0))
+      }), "Theme")
+      Make("Corner", Toggle, UDim.new(0.5, 0))
       
-      local WaitClick
+      local Busy
       local function SetToggle(Val)
-        if WaitClick then return end
-        
-        WaitClick, Default = true, Val
+        if Busy then return end
+        Busy, Default = true, Val
         SetFlag(Flag, Default)
         Funcs:FireCallback(Callback, Default)
         if Default then
           CreateTween({Toggle, "Position", UDim2.new(1, 0, 0.5), 0.25})
           CreateTween({Toggle, "BackgroundTransparency", 0, 0.25})
-          CreateTween({Toggle, "AnchorPoint", Vector2.new(1, 0.5), 0.25, Wait or false})
+          CreateTween({Toggle, "AnchorPoint", Vector2.new(1, 0.5), 0.25, true})
         else
           CreateTween({Toggle, "Position", UDim2.new(0, 0, 0.5), 0.25})
           CreateTween({Toggle, "BackgroundTransparency", 0.8, 0.25})
-          CreateTween({Toggle, "AnchorPoint", Vector2.new(0, 0.5), 0.25, Wait or false})
+          CreateTween({Toggle, "AnchorPoint", Vector2.new(0, 0.5), 0.25, true})
         end
-        WaitClick = false
-      end;task.spawn(SetToggle, Default)
+        Busy = false
+      end
+      task.spawn(SetToggle, Default)
       
-      Button.Activated:Connect(function()
-        SetToggle(not Default)
-      end)
+      Button.Activated:Connect(function() SetToggle(not Default) end)
       
-      local Toggle = {}
-      function Toggle:Visible(...) Funcs:ToggleVisible(Button, ...) end
-      function Toggle:Destroy() Button:Destroy() end
-      function Toggle:Callback(...) Funcs:InsertCallback(Callback, ...)() end
-      function Toggle:Set(Val1, Val2)
+      local ToggleObj = {}
+      function ToggleObj:Visible(...) Funcs:ToggleVisible(Button, ...) end
+      function ToggleObj:Destroy() Button:Destroy() end
+      function ToggleObj:Callback(...) Funcs:InsertCallback(Callback, ...) end
+      function ToggleObj:Set(Val1, Val2)
         if type(Val1) == "string" and type(Val2) == "string" then
           LabelFunc:SetTitle(Val1)
           LabelFunc:SetDesc(Val2)
         elseif type(Val1) == "string" then
-          LabelFunc:SetTitle(Val1, false, true)
+          LabelFunc:SetTitle(Val1)
         elseif type(Val1) == "boolean" then
-          if WaitClick and Val2 then
-            repeat task.wait() until not WaitClick
-          end
           task.spawn(SetToggle, Val1)
         elseif type(Val1) == "function" then
-          Callback = Val1
+          Callback = {Val1}
         end
       end
-      return Toggle
+      return ToggleObj
     end
-    function Tab:AddDropdown(Configs)
-      local DName = Configs[1] or Configs.Name or Configs.Title or "Dropdown"
-      local DDesc = Configs.Desc or Configs.Description or ""
-      local DOptions = Configs[2] or Configs.Options or {}
-      local OpDefault = Configs[3] or Configs.Default or {}
-      local Flag = Configs[5] or Configs.Flag or false
-      local DMultiSelect = Configs.MultiSelect or false
-      local Callback = Funcs:GetCallback(Configs, 4)
+    
+    function Tab:AddDropdown(Cfg)
+      Cfg = Cfg or {}
+      local DName = Cfg[1] or Cfg.Name or Cfg.Title or "Dropdown"
+      local DDesc = Cfg.Desc or Cfg.Description or ""
+      local DOptions = Cfg[2] or Cfg.Options or {}
+      local OpDefault = Cfg[3] or Cfg.Default or {}
+      local Flag = Cfg[5] or Cfg.Flag or false
+      local DMultiSelect = Cfg.MultiSelect or false
+      local Callback = Funcs:GetCallback(Cfg, 4)
       
-      local Button, LabelFunc = ButtonFrame(Container, DName, DDesc, UDim2.new(1, -180))
+      local Button = ButtonFrame(Container, DName, DDesc, UDim2.new(1, -180))
       
       local SelectedFrame = InsertTheme(Create("Frame", Button, {
         Size = UDim2.new(0, 150, 0, 18),
         Position = UDim2.new(1, -10, 0.5),
         AnchorPoint = Vector2.new(1, 0.5),
         BackgroundColor3 = Theme["Color Stroke"]
-      }), "Stroke")Make("Corner", SelectedFrame, UDim.new(0, 4))
+      }), "Stroke")
+      Make("Corner", SelectedFrame, UDim.new(0, 4))
       
       local ActiveLabel = InsertTheme(Create("TextLabel", SelectedFrame, {
         Size = UDim2.new(0.85, 0, 0.85, 0),
@@ -1281,7 +1272,10 @@ function redzlib:MakeWindow(Configs)
         Name = "DropdownFrame",
         ClipsDescendants = true,
         Active = true
-      })Make("Corner", DropFrame)Make("Stroke", DropFrame)Make("Gradient", DropFrame, {Rotation = 60})
+      })
+      Make("Corner", DropFrame)
+      Make("Stroke", DropFrame)
+      Make("Gradient", DropFrame, {Rotation = 60})
       
       local ScrollFrame = InsertTheme(Create("ScrollingFrame", DropFrame, {
         ScrollBarImageColor3 = Theme["Color Theme"],
@@ -1299,43 +1293,40 @@ function redzlib:MakeWindow(Configs)
           PaddingRight = UDim.new(0, 8),
           PaddingTop = UDim.new(0, 5),
           PaddingBottom = UDim.new(0, 5)
-        }), Create("UIListLayout", {
+        }),
+        Create("UIListLayout", {
           Padding = UDim.new(0, 4)
         })
       }), "ScrollBar")
       
-      local ScrollSize, WaitClick = 5
+      local ScrollSize, Busy = 5, false
+      local function GetFrameSize() return UDim2.fromOffset(152, ScrollSize) end
+      
       local function Disable()
-        WaitClick = true
+        if Busy then return end
+        Busy = true
         CreateTween({Arrow, "Rotation", 0, 0.2})
         CreateTween({DropFrame, "Size", UDim2.new(0, 152, 0, 0), 0.2, true})
         CreateTween({Arrow, "ImageColor3", Color3.fromRGB(255, 255, 255), 0.2})
         Arrow.Image = "rbxassetid://10709791523"
         NoClickFrame.Visible = false
-        WaitClick = false
-      end
-      
-      local function GetFrameSize()
-        return UDim2.fromOffset(152, ScrollSize)
+        Busy = false
       end
       
       local function CalculateSize()
         local Count = 0
-        for _,Frame in pairs(ScrollFrame:GetChildren()) do
-          if Frame:IsA("Frame") or Frame.Name == "Option" then
-            Count = Count + 1
-          end
+        for _, Frame in pairs(ScrollFrame:GetChildren()) do
+          if Frame.Name == "Option" then Count = Count + 1 end
         end
         ScrollSize = (math.clamp(Count, 0, 10) * 25) + 10
         if NoClickFrame.Visible then
-          NoClickFrame.Visible = true
           CreateTween({DropFrame, "Size", GetFrameSize(), 0.2, true})
         end
       end
       
       local function Minimize()
-        if WaitClick then return end
-        WaitClick = true
+        if Busy then return end
+        Busy = true
         if NoClickFrame.Visible then
           Arrow.Image = "rbxassetid://10709791523"
           CreateTween({Arrow, "ImageColor3", Color3.fromRGB(255, 255, 255), 0.2})
@@ -1347,49 +1338,34 @@ function redzlib:MakeWindow(Configs)
           CreateTween({Arrow, "ImageColor3", Theme["Color Theme"], 0.2})
           CreateTween({DropFrame, "Size", GetFrameSize(), 0.2, true})
         end
-        WaitClick = false
+        Busy = false
       end
       
       local function CalculatePos()
         local FramePos = SelectedFrame.AbsolutePosition
         local ScreenSize = ScreenGui.AbsoluteSize
         local ClampX = math.clamp((FramePos.X / UIScale), 0, ScreenSize.X / UIScale - DropFrame.Size.X.Offset)
-        local ClampY = math.clamp((FramePos.Y / UIScale) , 0, ScreenSize.Y / UIScale)
-        
-        local NewPos = UDim2.fromOffset(ClampX, ClampY)
+        local ClampY = math.clamp((FramePos.Y / UIScale), 0, ScreenSize.Y / UIScale)
         local AnchorPoint = FramePos.Y > ScreenSize.Y / 1.4 and 1 or ScrollSize > 80 and 0.5 or 0
         DropFrame.AnchorPoint = Vector2.new(0, AnchorPoint)
-        CreateTween({DropFrame, "Position", NewPos, 0.1})
+        CreateTween({DropFrame, "Position", UDim2.fromOffset(ClampX, ClampY), 0.1})
       end
       
-      local AddNewOptions, GetOptions, AddOption, RemoveOption, Selected do
+      local AddNewOptions, AddOption, RemoveOption, Selected do
         local Default = type(OpDefault) ~= "table" and {OpDefault} or OpDefault
-        local MultiSelect = DMultiSelect
         local Options = {}
-        Selected = MultiSelect and {} or CheckFlag(Flag) and GetFlag(Flag) or Default[1]
-        
-        if MultiSelect then
-          for index, Value in pairs(CheckFlag(Flag) and GetFlag(Flag) or Default) do
-            if type(index) == "string" and (DOptions[index] or table.find(DOptions, index)) then
-              Selected[index] = Value
-            elseif DOptions[Value] then
-              Selected[Value] = true
-            end
-          end
-        end
+        Selected = DMultiSelect and {} or CheckFlag(Flag) and GetFlag(Flag) or Default[1]
         
         local function CallbackSelected()
-          SetFlag(Flag, MultiSelect and Selected or tostring(Selected))
+          SetFlag(Flag, DMultiSelect and Selected or tostring(Selected))
           Funcs:FireCallback(Callback, Selected)
         end
         
         local function UpdateLabel()
-          if MultiSelect then
+          if DMultiSelect then
             local list = {}
             for index, Value in pairs(Selected) do
-              if Value then
-                table.insert(list, index)
-              end
+              if Value then table.insert(list, index) end
             end
             ActiveLabel.Text = #list > 0 and table.concat(list, ", ") or "..."
           else
@@ -1398,75 +1374,62 @@ function redzlib:MakeWindow(Configs)
         end
         
         local function UpdateSelected()
-          if MultiSelect then
-            for _,v in pairs(Options) do
-              local nodes, Stats = v.nodes, v.Stats
-              CreateTween({nodes[2], "BackgroundTransparency", Stats and 0 or 0.8, 0.35})
-              CreateTween({nodes[2], "Size", Stats and UDim2.fromOffset(4, 12) or UDim2.fromOffset(4, 4), 0.35})
-              CreateTween({nodes[3], "TextTransparency", Stats and 0 or 0.4, 0.35})
-            end
-          else
-            for _,v in pairs(Options) do
+          for _, v in pairs(Options) do
+            if DMultiSelect then
+              local Stats = v.Stats
+              CreateTween({v.nodes[2], "BackgroundTransparency", Stats and 0 or 0.8, 0.35})
+              CreateTween({v.nodes[2], "Size", Stats and UDim2.fromOffset(4, 12) or UDim2.fromOffset(4, 4), 0.35})
+              CreateTween({v.nodes[3], "TextTransparency", Stats and 0 or 0.4, 0.35})
+            else
               local Slt = v.Value == Selected
-              local nodes = v.nodes
-              CreateTween({nodes[2], "BackgroundTransparency", Slt and 0 or 1, 0.35})
-              CreateTween({nodes[2], "Size", Slt and UDim2.fromOffset(4, 14) or UDim2.fromOffset(4, 4), 0.35})
-              CreateTween({nodes[3], "TextTransparency", Slt and 0 or 0.4, 0.35})
+              CreateTween({v.nodes[2], "BackgroundTransparency", Slt and 0 or 1, 0.35})
+              CreateTween({v.nodes[2], "Size", Slt and UDim2.fromOffset(4, 14) or UDim2.fromOffset(4, 4), 0.35})
+              CreateTween({v.nodes[3], "TextTransparency", Slt and 0 or 0.4, 0.35})
             end
           end
           UpdateLabel()
         end
         
         local function Select(Option)
-          if MultiSelect then
+          if DMultiSelect then
             Option.Stats = not Option.Stats
-            Option.LastCB = tick()
-            
             Selected[Option.Name] = Option.Stats
-            CallbackSelected()
           else
-            Option.LastCB = tick()
-            
             Selected = Option.Value
-            CallbackSelected()
           end
+          CallbackSelected()
           UpdateSelected()
         end
         
         AddOption = function(index, Value)
           local Name = tostring(type(index) == "string" and index or Value)
-          
           if Options[Name] then return end
-          Options[Name] = {
-            index = index,
-            Value = Value,
-            Name = Name,
-            Stats = false,
-            LastCB = 0
-          }
+          Options[Name] = { index = index, Value = Value, Name = Name, Stats = false }
           
-          if MultiSelect then
+          if DMultiSelect then
             local Stats = Selected[Name]
             Selected[Name] = Stats or false
             Options[Name].Stats = Stats
           end
           
-          local Button = Make("Button", ScrollFrame, {
+          local OptBtn = Make("Button", ScrollFrame, {
             Name = "Option",
             Size = UDim2.new(1, 0, 0, 21),
             Position = UDim2.new(0, 0, 0.5),
             AnchorPoint = Vector2.new(0, 0.5)
-          })Make("Corner", Button, UDim.new(0, 4))
+          })
+          Make("Corner", OptBtn, UDim.new(0, 4))
           
-          local IsSelected = InsertTheme(Create("Frame", Button, {
+          local IsSelected = InsertTheme(Create("Frame", OptBtn, {
             Position = UDim2.new(0, 1, 0.5),
             Size = UDim2.new(0, 4, 0, 4),
             BackgroundColor3 = Theme["Color Theme"],
             BackgroundTransparency = 1,
             AnchorPoint = Vector2.new(0, 0.5)
-          }), "Theme")Make("Corner", IsSelected, UDim.new(0.5, 0))
+          }), "Theme")
+          Make("Corner", IsSelected, UDim.new(0.5, 0))
           
-          local OptioneName = InsertTheme(Create("TextLabel", Button, {
+          local OptionName = InsertTheme(Create("TextLabel", OptBtn, {
             Size = UDim2.new(1, 0, 1),
             Position = UDim2.new(0, 10),
             Text = Name,
@@ -1477,37 +1440,30 @@ function redzlib:MakeWindow(Configs)
             TextTransparency = 0.4
           }), "Text")
           
-          Button.Activated:Connect(function()
-            Select(Options[Name])
-          end)
-          
-          Options[Name].nodes = {Button, IsSelected, OptioneName}
+          OptBtn.Activated:Connect(function() Select(Options[Name]) end)
+          Options[Name].nodes = {OptBtn, IsSelected, OptionName}
+          Options[Name].Activate = function() Select(Options[Name]) end
         end
         
         RemoveOption = function(index, Value)
           local Name = tostring(type(index) == "string" and index or Value)
           if Options[Name] then
-            if MultiSelect then Selected[Name] = nil else Selected = nil end
+            if DMultiSelect then Selected[Name] = nil else Selected = nil end
             Options[Name].nodes[1]:Destroy()
-            table.clear(Options[Name])
             Options[Name] = nil
           end
         end
         
-        GetOptions = function()
-          return Options
-        end
-        
         AddNewOptions = function(List, Clear)
           if Clear then
-            table.foreach(Options, RemoveOption)
+            for k in pairs(Options) do RemoveOption(k) end
           end
-          table.foreach(List, AddOption)
+          for i, v in pairs(List or {}) do AddOption(i, v) end
           CallbackSelected()
           UpdateSelected()
         end
         
-        table.foreach(DOptions, AddOption)
+        for i, v in pairs(DOptions or {}) do AddOption(i, v) end
         CallbackSelected()
         UpdateSelected()
       end
@@ -1517,7 +1473,6 @@ function redzlib:MakeWindow(Configs)
       NoClickFrame.MouseButton1Click:Connect(Disable)
       MainFrame:GetPropertyChangedSignal("Visible"):Connect(Disable)
       SelectedFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(CalculatePos)
-      
       Button.Activated:Connect(CalculateSize)
       ScrollFrame.ChildAdded:Connect(CalculateSize)
       ScrollFrame.ChildRemoved:Connect(CalculateSize)
@@ -1527,39 +1482,19 @@ function redzlib:MakeWindow(Configs)
       local Dropdown = {}
       function Dropdown:Visible(...) Funcs:ToggleVisible(Button, ...) end
       function Dropdown:Destroy() Button:Destroy() end
-      function Dropdown:Callback(...) Funcs:InsertCallback(Callback, ...)(Selected) end
-      
+      function Dropdown:Callback(...) Funcs:InsertCallback(Callback, ...) end
       function Dropdown:Add(...)
         local NewOptions = {...}
         if type(NewOptions[1]) == "table" then
-          table.foreach(Option, function(_,Name)
-            AddOption(Name)
-          end)
+          for _, Name in pairs(NewOptions[1]) do AddOption(_, Name) end
         else
-          table.foreach(NewOptions, function(_,Name)
-            AddOption(Name)
-          end)
-        end
-      end
-      function Dropdown:Remove(Option)
-        for index, Value in pairs(GetOptions()) do
-          if type(Option) == "number" and index == Option or Value.Name == "Option" then
-            RemoveOption(index, Value.Value)
-          end
+          for _, Name in ipairs(NewOptions) do AddOption(_, Name) end
         end
       end
       function Dropdown:Select(Option)
-        if type(Option) == "string" then
-          for _,Val in pairs(Options) do
-            if Val.Name == Option then
-              Val.Active()
-            end
-          end
-        elseif type(Option) == "number" then
-          for ind,Val in pairs(Options) do
-            if ind == Option then
-              Val.Active()
-            end
+        for _, Val in pairs(Options) do
+          if Val.Name == tostring(Option) or Val.Value == Option then
+            Val.Activate()
           end
         end
       end
@@ -1567,25 +1502,26 @@ function redzlib:MakeWindow(Configs)
         if type(Val1) == "table" then
           AddNewOptions(Val1, not Clear)
         elseif type(Val1) == "function" then
-          Callback = Val1
+          Callback = {Val1}
         end
       end
       return Dropdown
     end
-    function Tab:AddSlider(Configs)
-      local SName = Configs[1] or Configs.Name or Configs.Title or "Slider!"
-      local SDesc = Configs.Desc or Configs.Description or ""
-      local Min = Configs[2] or Configs.MinValue or Configs.Min or 10
-      local Max = Configs[3] or Configs.MaxValue or Configs.Max or 100
-      local Increase = Configs[4] or Configs.Increase or 1
-      local Callback = Funcs:GetCallback(Configs, 6)
-      local Flag = Configs[7] or Configs.Flag or false
-      local Default = Configs[5] or Configs.Default or 25
+    
+    function Tab:AddSlider(Cfg)
+      Cfg = Cfg or {}
+      local SName = Cfg[1] or Cfg.Name or Cfg.Title or "Slider!"
+      local SDesc = Cfg.Desc or Cfg.Description or ""
+      local Min = Cfg[2] or Cfg.MinValue or Cfg.Min or 10
+      local Max = Cfg[3] or Cfg.MaxValue or Cfg.Max or 100
+      local Increase = Cfg[4] or Cfg.Increase or 1
+      local Callback = Funcs:GetCallback(Cfg, 6)
+      local Flag = Cfg[7] or Cfg.Flag or false
+      local Default = Cfg[5] or Cfg.Default or 25
       if CheckFlag(Flag) then Default = GetFlag(Flag) end
       Min, Max = Min / Increase, Max / Increase
       
       local Button, LabelFunc = ButtonFrame(Container, SName, SDesc, UDim2.new(1, -180))
-      
       local SliderHolder = Create("TextButton", Button, {
         Size = UDim2.new(0.45, 0, 1),
         Position = UDim2.new(1),
@@ -1600,13 +1536,15 @@ function redzlib:MakeWindow(Configs)
         Size = UDim2.new(1, -20, 0, 6),
         Position = UDim2.new(0.5, 0, 0.5),
         AnchorPoint = Vector2.new(0.5, 0.5)
-      }), "Stroke")Make("Corner", SliderBar)
+      }), "Stroke")
+      Make("Corner", SliderBar)
       
       local Indicator = InsertTheme(Create("Frame", SliderBar, {
         BackgroundColor3 = Theme["Color Theme"],
         Size = UDim2.fromScale(0.3, 1),
         BorderSizePixel = 0
-      }), "Theme")Make("Corner", Indicator)
+      }), "Theme")
+      Make("Corner", Indicator)
       
       local SliderIcon = Create("Frame", SliderBar, {
         Size = UDim2.new(0, 6, 0, 12),
@@ -1614,7 +1552,8 @@ function redzlib:MakeWindow(Configs)
         Position = UDim2.fromScale(0.3, 0.5),
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundTransparency = 0.2
-      })Make("Corner", SliderIcon)
+      })
+      Make("Corner", SliderIcon)
       
       local LabelVal = InsertTheme(Create("TextLabel", SliderHolder, {
         Size = UDim2.new(0, 14, 0, 14),
@@ -1626,40 +1565,32 @@ function redzlib:MakeWindow(Configs)
         TextSize = 12
       }), "Text")
       
-      local UIScale = Create("UIScale", LabelVal)
-      
-      local BaseMousePos = Create("Frame", SliderBar, {
-        Position = UDim2.new(0, 0, 0.5, 0),
-        Visible = false
-      })
+      local ValScale = Create("UIScale", LabelVal)
+      local BaseMousePos = Create("Frame", SliderBar, { Position = UDim2.new(0, 0, 0.5, 0), Visible = false })
       
       local function UpdateLabel(NewValue)
-        local Number = tonumber(NewValue * Increase)
-        Number = math.floor(Number * 100) / 100
-        
+        local Number = math.floor((tonumber(NewValue * Increase) or 0) * 100) / 100
         Default, LabelVal.Text = Number, tostring(Number)
         Funcs:FireCallback(Callback, Default)
       end
       
       local function ControlPos()
-        local MousePos = Player:GetMouse()
-        local APos = MousePos.X - BaseMousePos.AbsolutePosition.X
-        local ConfigureDpiPos = APos / SliderBar.AbsoluteSize.X
-        
-        SliderIcon.Position = UDim2.new(math.clamp(ConfigureDpiPos, 0, 1), 0, 0.5, 0)
+        local APos = PlayerMouse.X - BaseMousePos.AbsolutePosition.X
+        local ratio = math.clamp(APos / math.max(SliderBar.AbsoluteSize.X, 1), 0, 1)
+        SliderIcon.Position = UDim2.new(ratio, 0, 0.5, 0)
       end
       
       local function UpdateValues()
         Indicator.Size = UDim2.new(SliderIcon.Position.X.Scale, 0, 1, 0)
-        local SliderPos = SliderIcon.Position.X.Scale
-        local NewValue = math.floor(((SliderPos * Max) / Max) * (Max - Min) + Min)
+        local NewValue = math.floor(SliderIcon.Position.X.Scale * (Max - Min) + Min)
         UpdateLabel(NewValue)
       end
       
       SliderHolder.MouseButton1Down:Connect(function()
         CreateTween({SliderIcon, "Transparency", 0, 0.3})
         Container.ScrollingEnabled = false
-        while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do task.wait()
+        while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+          task.wait()
           ControlPos()
         end
         CreateTween({SliderIcon, "Transparency", 0.2, 0.3})
@@ -1668,27 +1599,26 @@ function redzlib:MakeWindow(Configs)
       end)
       
       LabelVal:GetPropertyChangedSignal("Text"):Connect(function()
-        UIScale.Scale = 0.3
-        CreateTween({UIScale, "Scale", 1.2, 0.1})
+        ValScale.Scale = 0.3
+        CreateTween({ValScale, "Scale", 1.2, 0.1})
         CreateTween({LabelVal, "Rotation", math.random(-1, 1) * 5, 0.15, true})
-        CreateTween({UIScale, "Scale", 1, 0.2})
+        CreateTween({ValScale, "Scale", 1, 0.2})
         CreateTween({LabelVal, "Rotation", 0, 0.1})
       end)
       
-			function SetSlider(NewValue)
-			  if type(NewValue) ~= "number" then return end
-			  
-        local Min, Max = Min * Increase, Max * Increase
-        
-        local SliderPos = (NewValue - Min) / (Max - Min)
-        
+      local function SetSlider(NewValue)
+        if type(NewValue) ~= "number" then return end
+        local realMin, realMax = Min * Increase, Max * Increase
+        local SliderPos = (NewValue - realMin) / math.max(realMax - realMin, 1)
         SetFlag(Flag, NewValue)
-        CreateTween({ SliderIcon, "Position", UDim2.fromScale(math.clamp(SliderPos, 0, 1), 0.5), 0.3, true })
-			end;SetSlider(Default)
-			
-			SliderIcon:GetPropertyChangedSignal("Position"):Connect(UpdateValues)UpdateValues()
-			
-			local Slider = {}
+        CreateTween({SliderIcon, "Position", UDim2.fromScale(math.clamp(SliderPos, 0, 1), 0.5), 0.3, true})
+      end
+      task.spawn(SetSlider, Default)
+      
+      SliderIcon:GetPropertyChangedSignal("Position"):Connect(UpdateValues)
+      UpdateValues()
+      
+      local Slider = {}
       function Slider:Set(NewVal1, NewVal2)
         if NewVal1 and NewVal2 then
           LabelFunc:SetTitle(NewVal1)
@@ -1696,36 +1626,33 @@ function redzlib:MakeWindow(Configs)
         elseif type(NewVal1) == "string" then
           LabelFunc:SetTitle(NewVal1)
         elseif type(NewVal1) == "function" then
-          Callback = NewVal1
+          Callback = {NewVal1}
         elseif type(NewVal1) == "number" then
           SetSlider(NewVal1)
         end
       end
-      function Slider:Callback(...) Funcs:InsertCallback(Callback, ...)(tonumber(Default)) end
+      function Slider:Callback(...) Funcs:InsertCallback(Callback, ...) end
       function Slider:Visible(...) Funcs:ToggleVisible(Button, ...) end
       function Slider:Destroy() Button:Destroy() end
-			return Slider
+      return Slider
     end
-    function Tab:AddTextBox(Configs)
-      local TName = Configs[1] or Configs.Name or Configs.Title or "Text Box"
-      local TDesc = Configs.Desc or Configs.Description or ""
-      local TDefault = Configs[2] or Configs.Default or ""
-      local TPlaceholderText = Configs[5] or Configs.PlaceholderText or "Input"
-      local TClearText = Configs[3] or Configs.ClearText or false
-      local Callback = Funcs:GetCallback(Configs, 4)
+    
+    function Tab:AddTextBox(Cfg)
+      Cfg = Cfg or {}
+      local TName = Cfg[1] or Cfg.Name or Cfg.Title or "Text Box"
+      local TDesc = Cfg.Desc or Cfg.Description or ""
+      local TPlaceholderText = Cfg[5] or Cfg.PlaceholderText or "Input"
+      local TClearText = Cfg[3] or Cfg.ClearText or false
+      local Callback = Funcs:GetCallback(Cfg, 4)
       
-      if type(TDefault) ~= "string" or TDefault:gsub(" ", ""):len() < 1 then
-        TDefault = false
-      end
-      
-      local Button, LabelFunc = ButtonFrame(Container, TName, TDesc, UDim2.new(1, -38))
-      
+      local Button = ButtonFrame(Container, TName, TDesc, UDim2.new(1, -38))
       local SelectedFrame = InsertTheme(Create("Frame", Button, {
         Size = UDim2.new(0, 150, 0, 18),
         Position = UDim2.new(1, -10, 0.5),
         AnchorPoint = Vector2.new(1, 0.5),
         BackgroundColor3 = Theme["Color Stroke"]
-      }), "Stroke")Make("Corner", SelectedFrame, UDim.new(0, 4))
+      }), "Stroke")
+      Make("Corner", SelectedFrame, UDim.new(0, 4))
       
       local TextBoxInput = InsertTheme(Create("TextBox", SelectedFrame, {
         Size = UDim2.new(0.85, 0, 0.85, 0),
@@ -1749,17 +1676,19 @@ function redzlib:MakeWindow(Configs)
       })
       
       local TextBox = {}
+      TextBox.OnChanging = false
       local function Input()
         local Text = TextBoxInput.Text
         if Text:gsub(" ", ""):len() > 0 then
-          if type(TextBox.OnChanging) then Text = TextBox.OnChanging(Text) or Text end
+          if type(TextBox.OnChanging) == "function" then
+            Text = TextBox.OnChanging(Text) or Text
+          end
           Funcs:FireCallback(Callback, Text)
           TextBoxInput.Text = Text
         end
       end
       
-      TextBoxInput.FocusLost:Connect(Input)Input()
-      
+      TextBoxInput.FocusLost:Connect(Input)
       TextBoxInput.FocusLost:Connect(function()
         CreateTween({Pencil, "ImageColor3", Color3.fromRGB(255, 255, 255), 0.2})
       end)
@@ -1767,16 +1696,17 @@ function redzlib:MakeWindow(Configs)
         CreateTween({Pencil, "ImageColor3", Theme["Color Theme"], 0.2})
       end)
       
-      TextBox.OnChanging = false
       function TextBox:Visible(...) Funcs:ToggleVisible(Button, ...) end
       function TextBox:Destroy() Button:Destroy() end
       return TextBox
     end
-    function Tab:AddDiscordInvite(Configs)
-      local Title = Configs[1] or Configs.Name or Configs.Title or "Discord"
-      local Desc = Configs.Desc or Configs.Description or ""
-      local Logo = Configs[2] or Configs.Logo or ""
-      local Invite = Configs[3] or Configs.Invite or ""
+    
+    function Tab:AddDiscordInvite(Cfg)
+      Cfg = Cfg or {}
+      local TitleText = Cfg[1] or Cfg.Name or Cfg.Title or "Discord"
+      local DescText = Cfg.Desc or Cfg.Description or ""
+      local Logo = Cfg[2] or Cfg.Logo or ""
+      local Invite = Cfg[3] or Cfg.Invite or ""
       
       local InviteHolder = Create("Frame", Container, {
         Size = UDim2.new(1, 0, 0, 80),
@@ -1784,7 +1714,7 @@ function redzlib:MakeWindow(Configs)
         BackgroundTransparency = 1
       })
       
-      local InviteLabel = Create("TextLabel", InviteHolder, {
+      Create("TextLabel", InviteHolder, {
         Size = UDim2.new(1, 0, 0, 15),
         Position = UDim2.new(0, 5),
         TextColor3 = Color3.fromRGB(40, 150, 255),
@@ -1800,16 +1730,19 @@ function redzlib:MakeWindow(Configs)
         AnchorPoint = Vector2.new(0, 1),
         Position = UDim2.new(0, 0, 1),
         BackgroundColor3 = Theme["Color Hub 2"]
-      }), "Frame")Make("Corner", FrameHolder)
+      }), "Frame")
+      Make("Corner", FrameHolder)
       
-      local ImageLabel = Create("ImageLabel", FrameHolder, {
+      local Img = Create("ImageLabel", FrameHolder, {
         Size = UDim2.new(0, 30, 0, 30),
         Position = UDim2.new(0, 7, 0, 7),
         Image = Logo,
         BackgroundTransparency = 1
-      })Make("Corner", ImageLabel, UDim.new(0, 4))Make("Stroke", ImageLabel)
+      })
+      Make("Corner", Img, UDim.new(0, 4))
+      Make("Stroke", Img)
       
-      local LTitle = InsertTheme(Create("TextLabel", FrameHolder, {
+      InsertTheme(Create("TextLabel", FrameHolder, {
         Size = UDim2.new(1, -52, 0, 15),
         Position = UDim2.new(0, 44, 0, 7),
         Font = Enum.Font.GothamBold,
@@ -1817,10 +1750,10 @@ function redzlib:MakeWindow(Configs)
         TextXAlignment = "Left",
         BackgroundTransparency = 1,
         TextSize = 10,
-        Text = Title
+        Text = TitleText
       }), "Text")
       
-      local LDesc = InsertTheme(Create("TextLabel", FrameHolder, {
+      InsertTheme(Create("TextLabel", FrameHolder, {
         Size = UDim2.new(1, -52, 0, 0),
         Position = UDim2.new(0, 44, 0, 22),
         TextWrapped = "Y",
@@ -1830,7 +1763,7 @@ function redzlib:MakeWindow(Configs)
         TextXAlignment = "Left",
         BackgroundTransparency = 1,
         TextSize = 8,
-        Text = Desc
+        Text = DescText
       }), "DarkText")
       
       local JoinButton = Create("TextButton", FrameHolder, {
@@ -1842,24 +1775,26 @@ function redzlib:MakeWindow(Configs)
         TextSize = 12,
         TextColor3 = Color3.fromRGB(220, 220, 220),
         BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-      })Make("Corner", JoinButton, UDim.new(0, 5))
+      })
+      Make("Corner", JoinButton, UDim.new(0, 5))
       
       local ClickDelay
       JoinButton.Activated:Connect(function()
-        setclipboard(Invite)
+        if setclipboard then pcall(setclipboard, Invite) end
         if ClickDelay then return end
-        
         ClickDelay = true
         SetProps(JoinButton, {
           Text = "Copied to Clipboard",
           BackgroundColor3 = Color3.fromRGB(100, 100, 100),
           TextColor3 = Color3.fromRGB(150, 150, 150)
-        })task.wait(5)
+        })
+        task.wait(5)
         SetProps(JoinButton, {
           Text = "Join",
           BackgroundColor3 = Color3.fromRGB(50, 150, 50),
           TextColor3 = Color3.fromRGB(220, 220, 220)
-        })ClickDelay = false
+        })
+        ClickDelay = false
       end)
       
       local DiscordInvite = {}
